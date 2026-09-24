@@ -2,6 +2,8 @@
 
 输入 JM 号下载漫画，下载后放在书架上离线看。手机端界面，可「添加到主屏幕」当 App 用。
 
+**安卓安装包**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载最新的 `.apk`，装上就能用，不需要电脑。
+
 - 书架：封面墙，显示标题、页数
 - 下载：输入 JM 号（可多个）或关键字搜索，带实时进度
 - 阅读：整本连续竖滑、进度条跳页、点击隐藏界面、自动记住看到第几页
@@ -83,7 +85,8 @@ python deploy.py
 界面资源的版本号由文件内容算出来，改了自动变，不会出现 WebView 拿旧缓存的问题。
 
 构建工具链装在 `D:\androidbuild`（JDK 21、Android SDK 34、Gradle 8.7、
-Python 3.11），安卓工程在 `D:\androidbuild\jmapp`。
+Python 3.11），安卓工程在 `D:\androidbuild\jmapp`。安卓外壳工程（Chaquopy + WebView）
+目前不在这个仓库里，这里只有服务端和界面；直接用的话装 Releases 里的 APK 就行。
 
 ### 安卓版的两个特殊处理
 
