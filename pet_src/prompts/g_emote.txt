@@ -1,0 +1,18 @@
+The input image is a 2x2 grid showing the SAME chibi girl four times on a flat green background. Redraw each of the four figures IN PLACE with the new pose and expression described below for its cell.
+
+STRICT RULES — keep these exactly as in the input figure of each cell:
+- Same overall size and position in the cell: the top of the little whale and the soles of the feet stay at the same height as in the input.
+- Same super-deformed chibi proportions: the huge head (from the top of the hair to the chin) takes about 45% of her total height, the face is wide and round, the legs are short, the skirt hem stays at the same height as in the input. Do NOT make the legs longer or the head smaller.
+- Same very large, tall, round blue eyes with the same size and spacing as in the input.
+- Same small orange little whale on her head, the same size as in the input.
+- Same outfit, same silver twin tails with black-and-orange clips, same orange little whale hair clip, same thin brown line art and soft painted style.
+THE LITTLE WHALE ON HER HEAD (very important, copy it from the input): a small round orange baby whale with a few white spots on top, a wide toothy grin, and short orange little fins gripping her hair. Its two eyes are big solid BLACK circles, and inside each black circle is a WHITE HEART shape — that black circle with a white heart IS the eye. It has NO white eyeballs and NO separate pupils, and do not add any extra eyes. Show the little whale's emotion only by changing the shape of the white hearts / black circles (for example squeezed into happy arcs, tilted angry, with tears below, wide with surprise) and its mouth, while keeping exactly two eyes of this black-circle-with-white-heart design.
+
+Only change the arms, hands, hand-held book, facial expression and small effects described for each cell.
+
+Top-left: HAPPY — eyes closed in a big smile (^ ^), both arms raised in a cheer, holding the small open book up in one hand, little whale also smiling.
+Top-right: SAD — teary eyes, small frown, hugging the small book to her chest, little whale looking worried.
+Bottom-left: POUTING / ANGRY — puffed cheeks, frowning eyebrows, hands on hips, the book tucked under one arm, little whale with an angry vein mark.
+Bottom-right: SURPRISED — eyes opened even wider and round, small open mouth "oh!", both hands raised near her chest, a tiny sweat drop, little whale startled.
+
+Keep the background completely flat solid pure green (#00FF00), no shadow, no gradient, no text, no labels, no grid lines. Nothing overlaps between cells.

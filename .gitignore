@@ -1,0 +1,19 @@
+# 下载的漫画、封面和缩略图缓存、导出的备份
+downloads/
+covers/
+thumbs/
+backups/
+
+# 构建出来的安装包
+*.apk
+
+# 个人数据：设置、黑名单、分组、下载队列（第一次启动会自动生成）
+config.json
+blacklist.json
+groups.json
+queue.json
+
+# Python 缓存、本地工具配置
+__pycache__/
+*.pyc
+.claude/

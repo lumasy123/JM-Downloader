@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14141a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css?v=4">
+<title>JM下载器</title>
+</head>
+<body>
+
+<!-- 书架 -->
+<section id="view-shelf" class="view active">
+  <div id="ptr" class="ptr"><span data-icon="refresh"></span></div>
+  <header class="topbar" id="shelf-top">
+    <button id="btn-drawer" class="icon-btn" aria-label="分组" title="分组"><span data-icon="menu"></span></button>
+    <h1 id="shelf-title">书架</h1>
+    <button id="btn-view" class="icon-btn" aria-label="切换视图" title="切换视图"></button>
+  </header>
+  <header class="topbar hidden" id="select-bar">
+    <button id="sel-exit" class="icon-btn" aria-label="退出多选" title="退出多选"><span data-icon="close"></span></button>
+    <h1 id="sel-count">已选 0 本</h1>
+    <button id="sel-all" class="icon-btn" aria-label="全选" title="全选"><span data-icon="selectAll"></span></button>
+    <button id="sel-export" class="icon-btn" aria-label="导出号单" title="导出号单"><span data-icon="share"></span></button>
+    <button id="sel-group" class="icon-btn" aria-label="移动到分组" title="移动到分组"><span data-icon="folder"></span></button>
+    <button id="sel-delete" class="icon-btn" aria-label="删除" title="删除"><span data-icon="trash"></span></button>
+  </header>
+  <div id="shelf-tools" class="shelf-tools">
+    <input id="shelf-search" type="search" placeholder="搜标题 / 作者 / JM号 / 标签，空格分词，-词 排除">
+    <button id="shelf-mode" class="mode-toggle" data-search-mode></button>
+    <select id="shelf-sort" aria-label="排序">
+      <option value="added">最近添加</option>
+      <option value="read">最近阅读</option>
+      <option value="name">标题</option>
+      <option value="pages">页数</option>
+    </select>
+  </div>
+  <div id="shelf-filters" class="chips scroll"></div>
+  <div id="continue" class="continue hidden"></div>
+  <div id="shelf-grid" class="grid"></div>
+  <div id="shelf-nomatch" class="hint center hidden">没有匹配的漫画</div>
+  <div id="shelf-empty" class="empty hidden">
+    <div class="empty-art">◍</div>
+    <p>书架还是空的</p>
+    <button class="primary" data-goto="download">去下载一本</button>
+  </div>
+</section>
+
+<!-- 下载 -->
+<section id="view-download" class="view">
+  <header class="topbar"><h1>下载</h1></header>
+
+  <div class="panel">
+    <div class="input-row">
+      <input id="search-input" type="search" placeholder="搜索标题 / 作者 / 标签，或输入 JM 号">
+      <button id="btn-search" class="ghost">搜索</button>
+    </div>
+    <p class="hint">纯数字按 JM 号直接下载；多个关键字用空格隔开，词前加 - 表示排除，例如：校服 -NTR</p>
+    <div class="chips" id="search-kinds">
+      <button class="chip active" data-kind="site">综合</button>
+      <button class="chip" data-kind="work">标题</button>
+      <button class="chip" data-kind="author">作者</button>
+      <button class="chip" data-kind="tag">标签</button>
+    </div>
+    <div class="chips mode-row" id="search-mode">
+      <span class="mode-label">多个关键字</span>
+      <button class="chip" data-mode="and">同时包含</button>
+      <button class="chip" data-mode="or">包含其一</button>
+    </div>
+    <label class="blk-toggle">
+      <input type="checkbox" class="switch" id="show-blocked">
+      <span>显示已拉黑的本子和标签</span>
+    </label>
+  </div>
+
+  <div id="search-history" class="history hidden"></div>
+  <div id="search-hint" class="hint center"></div>
+  <div id="search-results" class="cards"></div>
+  <nav id="pager" class="pager hidden" aria-label="翻页"></nav>
+
+</section>
+
+<!-- 下载任务 -->
+<section id="view-tasks" class="view">
+  <header class="topbar"><h1>任务</h1></header>
+  <div id="pending-banner" class="banner hidden">
+    <span id="pending-text"></span>
+    <button id="pending-resume" class="primary">继续下载</button>
+    <button id="pending-clear" class="ghost">忽略</button>
+  </div>
+  <div id="task-list" class="list"></div>
+  <div id="task-empty" class="empty hidden">
+    <div class="empty-art">↓</div>
+    <p>还没有下载任务</p>
+  </div>
+</section>
+
+<!-- 我的 -->
+<section id="view-mine" class="view">
+  <header class="topbar"><h1>我的</h1></header>
+  <div class="menu">
+    <button class="menu-item" id="mine-settings">
+      <span class="label">设置</span>
+      <span class="value">下载 · 阅读 · 外观</span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-blacklist">
+      <span class="label">本子黑名单</span>
+      <span class="value" id="mine-blacklist-count"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-tagblack">
+      <span class="label">标签黑名单</span>
+      <span class="value" id="mine-tagblack-count"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-storage">
+      <span class="label">存储空间</span>
+      <span class="value" id="mine-storage-size"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-list-export">
+      <span class="label">导出 JM 号单</span>
+      <span class="value">分享给别人或换设备用</span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-list-import">
+      <span class="label">导入 JM 号单</span>
+      <span class="value">挑着批量下载</span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-export">
+      <span class="label">导出备份</span>
+      <span class="value">分组 · 黑名单 · 阅读进度</span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-import">
+      <span class="label">导入备份</span>
+      <span class="arrow">›</span>
+    </button>
+  </div>
+  <input id="backup-file" type="file" accept=".json,application/json" class="hidden">
+  <input id="list-file" type="file" accept=".txt,.json,text/plain,application/json" class="hidden">
+</section>
+
+<!-- 导入号单 -->
+<section id="view-import" class="view">
+  <header class="topbar">
+    <button class="icon-btn" data-back aria-label="返回" title="返回"><span data-icon="back"></span></button>
+    <h1 id="import-title">导入号单</h1>
+    <button id="imp-all" class="icon-btn" aria-label="全选" title="全选"><span data-icon="selectAll"></span></button>
+  </header>
+  <p id="import-hint" class="hint center"></p>
+  <div id="import-list" class="grid"></div>
+  <div id="import-bar" class="actionbar">
+    <span id="import-count">已选 0 本</span>
+    <button id="imp-download" class="primary">批量下载</button>
+  </div>
+</section>
+
+<!-- 设置 -->
+<section id="view-settings" class="view">
+  <header class="topbar">
+    <button class="icon-btn" data-back aria-label="返回" title="返回"><span data-icon="back"></span></button>
+    <h1>设置</h1>
+  </header>
+  <div class="settings">
+    <h2 class="section-title">下载</h2>
+    <div class="menu">
+      <label class="menu-item setting">
+        <span class="label">同时下载<small>多了会互相抢带宽</small></span>
+        <select data-setting="concurrent">
+          <option value="1">1 本</option><option value="2">2 本</option><option value="3">3 本</option>
+          <option value="4">4 本</option><option value="5">5 本</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">单本并发图片<small>网络差就调小</small></span>
+        <select data-setting="threads">
+          <option value="4">4</option><option value="8">8</option><option value="12">12</option>
+          <option value="16">16</option><option value="20">20</option><option value="24">24</option>
+          <option value="32">32</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">图片格式<small>只影响之后新下载的本子</small></span>
+        <select data-setting="image_format">
+          <option value="webp">WebP（省约三成空间）</option>
+          <option value="jpg">JPEG（兼容性最好）</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">图片质量<small>需要重新编码的页面才用得上</small></span>
+        <select data-setting="image_quality">
+          <option value="60">60 · 很小</option><option value="70">70</option>
+          <option value="80">80 · 推荐</option><option value="90">90</option>
+          <option value="95">95 · 接近原图</option>
+        </select>
+      </label>
+      <label class="menu-item setting stack">
+        <span class="label">代理<small>留空为直连；手机上开 VPN 模式的代理就不用填</small></span>
+        <input data-setting="proxy" type="text" placeholder="例如 127.0.0.1:7890" autocomplete="off">
+      </label>
+    </div>
+
+    <h2 class="section-title">阅读</h2>
+    <div class="menu">
+      <label class="menu-item setting">
+        <span class="label">阅读模式</span>
+        <select data-pref="jm-read-mode">
+          <option value="scroll">竖向滚动</option>
+          <option value="ltr">左右翻页</option>
+          <option value="rtl">日漫（从右往左）</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">横屏双页<small>翻页模式下横屏时左右两页并排，第一页单独显示</small></span>
+        <input type="checkbox" class="switch" data-pref="jm-spread">
+      </label>
+      <label class="menu-item setting">
+        <span class="label">音量键翻页</span>
+        <input type="checkbox" class="switch" data-pref="jm-volume-keys">
+      </label>
+      <label class="menu-item setting">
+        <span class="label">工具栏自动隐藏<small>3 秒不操作就收起</small></span>
+        <input type="checkbox" class="switch" data-pref="jm-autohide">
+      </label>
+    </div>
+
+    <h2 class="section-title">外观</h2>
+    <div class="menu">
+      <label class="menu-item setting">
+        <span class="label">主题</span>
+        <select data-pref="jm-theme">
+          <option value="system">跟随系统</option>
+          <option value="dark">深色</option>
+          <option value="light">浅色</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">书架视图</span>
+        <select data-pref="jm-shelf-view">
+          <option value="list">列表</option>
+          <option value="wall">封面墙</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">看板娘<small>长按她可以收起来，点底栏上的小鲸鱼叫回来</small></span>
+        <input type="checkbox" class="switch" data-pref="jm-pet">
+      </label>
+    </div>
+    <h2 class="section-title">隐私</h2>
+    <div class="menu">
+      <label class="menu-item setting stack">
+        <span class="label">遮挡时保留的标签<small>点顶栏的眼睛按钮一键遮挡：封面盖上纯色，标签除了中文、汉化、全彩、同人这类说明性质的，其余全部盖住。这里可以再加几个不想遮的标签，用空格或逗号隔开</small></span>
+        <input data-pref="jm-mask-allow" type="text" placeholder="例如 校服 双马尾" autocomplete="off">
+      </label>
+      <label class="menu-item setting">
+        <span class="label">最近任务里隐藏画面<small>切到后台时，任务列表里不显示 App 内容。安卓 12 及以下同时会禁止截屏</small></span>
+        <input type="checkbox" class="switch" data-pref="jm-privacy">
+      </label>
+    </div>
+    <p class="hint center">下载设置改完立即生效，正在下载的本子不受影响</p>
+  </div>
+</section>
+
+<!-- 详情 -->
+<section id="view-detail" class="view">
+  <header class="topbar">
+    <button class="icon-btn" data-back aria-label="返回" title="返回"><span data-icon="back"></span></button>
+    <h1 id="detail-title">详情</h1>
+  </header>
+  <div id="detail-body" class="detail"></div>
+</section>
+
+<!-- 阅读器 -->
+<section id="view-reader" class="view reader">
+  <header id="reader-top" class="reader-bar top">
+    <button class="icon-btn" data-back aria-label="返回" title="返回"><span data-icon="back"></span></button>
+    <span id="reader-title"></span>
+    <button id="btn-pages" class="icon-btn" aria-label="页面总览" title="页面总览"><span data-icon="grid"></span></button>
+    <button id="btn-chapters" class="icon-btn hidden" aria-label="目录" title="目录"><span data-icon="list"></span></button>
+    <button id="btn-mode" class="icon-btn" aria-label="阅读模式" title="阅读模式"><span data-icon="book"></span></button>
+    <button id="btn-fit" class="icon-btn" aria-label="适应宽度/高度" title="适应宽度/高度"><span data-icon="fit"></span></button>
+    <button id="btn-light" class="icon-btn" aria-label="亮度" title="亮度"><span data-icon="sun"></span></button>
+    <button id="btn-rotate" class="icon-btn" aria-label="横屏/竖屏" title="横屏/竖屏"><span data-icon="rotate"></span></button>
+  </header>
+  <div id="light-panel" class="light-panel hidden">
+    <span data-icon="sun" data-size="16"></span>
+    <input id="light-slider" type="range" min="5" max="100" value="60" aria-label="亮度">
+    <button id="light-system" class="chbtn">跟随系统</button>
+  </div>
+  <div id="mode-menu" class="popmenu hidden" role="menu"></div>
+  <div id="reader-pages"></div>
+  <div id="dimmer"></div>
+  <div id="overview" class="overview hidden">
+    <header class="reader-bar top">
+      <button id="ov-close" class="icon-btn" aria-label="关闭" title="关闭"><span data-icon="close"></span></button>
+      <span id="ov-title">页面总览</span>
+    </header>
+    <div id="ov-grid" class="ov-grid"></div>
+  </div>
+  <footer id="reader-bottom" class="reader-bar bottom">
+    <button id="ch-prev" class="chbtn hidden">上一话</button>
+    <input id="reader-slider" type="range" min="1" value="1">
+    <span id="reader-counter">1 / 1</span>
+    <button id="ch-next" class="chbtn hidden">下一话</button>
+  </footer>
+  <div id="zoom-hint"></div>
+</section>
+
+<nav id="tabbar">
+  <button class="tab active" data-goto="shelf"><span data-icon="books"></span>书架</button>
+  <button class="tab" data-goto="download"><span data-icon="search"></span>下载</button>
+  <button class="tab" data-goto="tasks"><span data-icon="download"></span>任务<i id="task-dot"></i></button>
+  <button class="tab" data-goto="mine"><span data-icon="user"></span>我的</button>
+  <!-- 看板娘：站在底栏上，底栏藏起来她也跟着藏 -->
+  <div id="pet-stage" aria-hidden="true">
+    <div id="pet">
+      <div class="pet-bubble"></div>
+      <div class="pet-move">
+        <div class="pet-sprite">
+          <img src="/pet-body.webp" alt="" draggable="false" class="pet-base">
+          <img src="/pet-whale.webp" alt="" draggable="false" class="pet-base pet-whale">
+          <img src="/pet-blink.webp" alt="" draggable="false" class="pet-base pet-blink">
+          <!-- 动作图由 pet.js 按 POSES 列表加在这里 -->
+        </div>
+      </div>
+    </div>
+    <button id="pet-call" class="hidden" aria-label="叫看板娘出来" title="叫看板娘出来"></button>
+  </div>
+</nav>
+
+<!-- 左侧分组栏 -->
+<div id="drawer" class="drawer hidden">
+  <aside class="drawer-panel">
+    <h3>分组</h3>
+    <div id="drawer-groups" class="sheet-list"></div>
+    <div class="input-row">
+      <input id="new-group" type="text" maxlength="20" placeholder="新建分组">
+      <button id="btn-new-group" class="primary icon-only" aria-label="新建分组" title="新建分组"><span data-icon="plus"></span></button>
+    </div>
+  </aside>
+</div>
+
+<!-- 通用弹层：选分组 / 黑名单 -->
+<div id="sheet" class="sheet hidden">
+  <div class="sheet-panel">
+    <h3 id="sheet-title"></h3>
+    <div id="sheet-body" class="sheet-list"></div>
+    <button id="sheet-close" class="ghost wide">关闭</button>
+  </div>
+</div>
+
+<div id="snackbar"><span></span><button></button></div>
+
+<div id="dialog" class="dialog hidden" role="dialog" aria-modal="true">
+  <div class="dialog-box">
+    <h3></h3>
+    <p></p>
+    <div class="dialog-actions">
+      <button class="ghost" data-no>取消</button>
+      <button class="primary" data-yes>确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="tip" class="tip hidden">
+  <p></p>
+  <button class="primary">知道了</button>
+</div>
+
+<div id="toast"></div>
+
+<script src="/app.js?v=4"></script>
+<script src="/pet.js?v=4"></script>
+<script src="/mask.js?v=4"></script>
+</body>
+</html>
