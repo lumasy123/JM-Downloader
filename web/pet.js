@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------ 看板娘 */
 // 站在底栏上的小人。平时三张图叠起来：身体、小鲸鱼（单独呼吸）、闭眼贴片（眨眼）；
 // 做反应时整张换成对应的动作图。底栏上能看到她的时候，提示、通知、首次使用教程都由她来说，
-// 有的气泡里带按钮（下载完「去看看」、失败「重试」、没看完的书「继续」）。台词在 pet-lines.json。
+// 有的气泡里带按钮（下载完「去看看」、失败「重试」）。台词在 pet-lines.json。
 // 点她会跳一下说句话，左右拖能换位置，长按收起来，收起后点底栏上的小鲸鱼叫回来。
 // 一阵子没人操作她就低头看手里的漫画，时不时评论两句，有些会拿书架上的标签、作者打趣。
 (() => {
@@ -256,17 +256,22 @@
     speak(line, vars, 3600);
   }
 
-  // 书架上有看到一半的书：提议接着看，气泡里带「继续」按钮，点了直接跳回上次的位置
-  function suggestResume() {
-    const books = ((typeof shelfItems !== 'undefined' && shelfItems) || [])
-      .filter((b) => readState(b) === 'reading')
-      .sort((a, b) => lastRead(b.id) - lastRead(a.id))
-      .slice(0, 3);   // 最近读过的三本里挑
-    const b = pick(books);
-    if (!b || !L('resume').length) return false;
-    const pos = getProgress(b.id);
-    speak(pick(L('resume')), { name: short(b.name), pos: pos + 1, pages: b.pages }, null,
-      { label: '继续', run: () => openReader(b.id, pos) });
+  // 点她时偶尔拿书架上的标签、作者说一句
+  function shelfTap() {
+    const books = (typeof shelfItems !== 'undefined' && shelfItems) || [];
+    if (!books.length) return false;
+    const ideas = [];
+    const [tag, tagN] = pickPopular(countTags(books).tags);
+    if (tag) S('tapTag').forEach((line) => ideas.push([line, { tag, n: tagN }]));
+    const authors = new Map();
+    books.forEach((b) => b.author && authors.set(b.author, (authors.get(b.author) || 0) + 1));
+    const [author, authorN] = pickPopular([...authors]);
+    if (author) S('tapAuthor').forEach((line) => ideas.push([line, { author, n: authorN }]));
+    const choice = pick(ideas);
+    if (!choice) return false;
+    const said = Object.values(choice[1]);
+    for (const name of [tag, author]) if (name && said.includes(name)) remember(name);
+    speak(choice[0], choice[1]);
     return true;
   }
 
@@ -338,7 +343,7 @@
     setTimeout(() => pet.classList.remove('wiggle'), 1200);
     if (pokes.length === 3) speak(pick(L('pokeMild')));
     else if (running > 0 && Math.random() < 0.5) speak(pick(L('busy')), { n: running });
-    else if (Math.random() < 0.2 && suggestResume()) { /* 已经说了 */ }
+    else if (Math.random() < 0.35 && shelfTap()) { /* 已经说了 */ }
     else if (!localStorage.getItem('jm-tip-pet')) {
       localStorage.setItem('jm-tip-pet', '1');
       speak(['explain', '长按我可以把我收起来哦~'], null, 3600);
@@ -542,9 +547,6 @@
       const key = h < 5 ? 'helloNight' : h < 11 ? 'helloMorning' : h < 14 ? 'helloNoon'
         : h < 18 ? 'helloAfternoon' : h < 23 ? 'helloEvening' : 'helloNight';
       speak(pick(L(key)));
-      setTimeout(() => {
-        if (visible() && !sticky && !reading && Math.random() < 0.6) suggestResume();
-      }, 4200);
     }
   }, 1200));
 })();
