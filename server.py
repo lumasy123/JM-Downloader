@@ -86,6 +86,15 @@ GROUPS_PATH = DOWNLOAD_DIR.parent / "groups.json"
 # 拉黑的漫画，搜索时过滤掉
 BLACKLIST_PATH = DOWNLOAD_DIR.parent / "blacklist.json"
 
+# 收藏的标签、作者（搜索时排前面、动态页追更新），以及书架上加了星的本子
+FAVORITES_PATH = DOWNLOAD_DIR.parent / "favorites.json"
+
+# 书架上每本的小笔记
+NOTES_PATH = DOWNLOAD_DIR.parent / "notes.json"
+
+# 「动态」页：收藏作者的新本、和收藏标签最搭的新本的缓存，以及已经提醒过的新本
+FEED_PATH = DOWNLOAD_DIR.parent / "feed.json"
+
 # 书架用的小缩略图。和封面缓存一样放在 downloads 外面
 THUMB_DIR = DOWNLOAD_DIR.parent / "thumbs"
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
@@ -278,10 +287,21 @@ def save_groups(data: dict) -> None:
 _BLACKLIST_LOCK = threading.Lock()
 
 
-def load_blacklist() -> dict:
-    """{"items": [{"id", "name"}], "tags": [标签, ...]}
+def _clean_names(raw) -> list[str]:
+    """标签 / 作者名单：去空、去首尾空格、按大小写不敏感去重，保持原顺序。"""
+    out, seen = [], set()
+    for x in raw or []:
+        t = str(x).strip()[:60]
+        if t and norm_tag(t) not in seen:
+            seen.add(norm_tag(t))
+            out.append(t)
+    return out
 
-    items 是单本拉黑（存名字是为了黑名单列表能显示标题），tags 是标签拉黑。
+
+def load_blacklist() -> dict:
+    """{"items": [{"id", "name"}], "tags": [标签, ...], "authors": [作者, ...]}
+
+    items 是单本拉黑（存名字是为了黑名单列表能显示标题），tags、authors 是按标签、作者拉黑。
     """
     if BLACKLIST_PATH.exists():
         try:
@@ -291,11 +311,72 @@ def load_blacklist() -> dict:
                     {"id": str(x.get("id")), "name": str(x.get("name", ""))}
                     for x in data.get("items", []) if x.get("id")
                 ],
-                "tags": [str(t).strip() for t in data.get("tags", []) if str(t).strip()],
+                "tags": _clean_names(data.get("tags")),
+                "authors": _clean_names(data.get("authors")),
             }
         except Exception:
             pass
-    return {"items": [], "tags": []}
+    return {"items": [], "tags": [], "authors": []}
+
+
+_FAVORITES_LOCK = threading.Lock()
+
+
+def load_favorites() -> dict:
+    """{"tags": [标签], "authors": [作者], "books": [加了星的漫画id]}"""
+    if FAVORITES_PATH.exists():
+        try:
+            data = json.loads(FAVORITES_PATH.read_text("utf-8"))
+            return {
+                "tags": _clean_names(data.get("tags")),
+                "authors": _clean_names(data.get("authors")),
+                "books": [str(x) for x in data.get("books", []) if str(x).isdigit()],
+            }
+        except Exception:
+            pass
+    return {"tags": [], "authors": [], "books": []}
+
+
+def save_favorites(data: dict) -> None:
+    FAVORITES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+_NOTES_LOCK = threading.Lock()
+
+
+def load_notes() -> dict[str, str]:
+    if NOTES_PATH.exists():
+        try:
+            data = json.loads(NOTES_PATH.read_text("utf-8"))
+            return {str(k): str(v) for k, v in data.items() if str(k).isdigit() and str(v).strip()}
+        except Exception:
+            pass
+    return {}
+
+
+def save_notes(data: dict) -> None:
+    NOTES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+def author_keys(author) -> set[str]:
+    """作者字段里可能写着好几个人（「甲、乙」「甲 & 乙」），拆开来一个个比对。"""
+    text = str(author or "")
+    parts = re.split(r"[、,，/／&＆;；]+", text)
+    return {norm_tag(x) for x in [text, *parts] if norm_tag(x)}
+
+
+def change_names(which: str, kind: str, add, remove) -> None:
+    """黑名单 / 收藏名单里的标签、作者，一次加减一批。"""
+    path_lock = (_BLACKLIST_LOCK, load_blacklist, save_blacklist) if which == "black" \
+        else (_FAVORITES_LOCK, load_favorites, save_favorites)
+    lock, load, save = path_lock
+    with lock:
+        data = load()
+        drop = {norm_tag(x) for x in (remove or [])}
+        cur = [x for x in data[kind] if norm_tag(x) not in drop]
+        # 新加的排在前面，名单里最近加的一眼能看到
+        data[kind] = _clean_names([*(add or []), *cur])
+        save(data)
 
 
 def norm_tag(tag) -> str:
@@ -313,6 +394,10 @@ def save_blacklist(data: dict) -> None:
 
 def blocked_ids() -> set[str]:
     return {x["id"] for x in load_blacklist()["items"]}
+
+
+def blocked_authors() -> set[str]:
+    return {norm_tag(a) for a in load_blacklist()["authors"]}
 
 
 def write_meta(album_dir: Path, album, chapters: list, *,
@@ -421,12 +506,16 @@ def album_summary(album_dir: Path) -> dict | None:
 
 def build_shelf() -> list[dict]:
     assign = load_groups()["assign"]
+    starred = set(load_favorites()["books"])
+    notes = load_notes()
     items = []
     for d in DOWNLOAD_DIR.iterdir():
         if d.is_dir():
             item = album_summary(d)
             if item:
                 item["group"] = assign.get(item["id"], "")
+                item["starred"] = item["id"] in starred
+                item["note"] = notes.get(item["id"], "")
                 items.append(item)
     items.sort(key=lambda x: x["added_at"], reverse=True)
     return items
@@ -761,6 +850,8 @@ def _parse_results(result) -> list[dict]:
             "category": str(category.get("title") or ""),
             "tags": [],
             "cover": f"/cover/{album_id}",
+            # 最后更新时间（秒），动态页按它排、只留一个月内的
+            "updated": int(info.get("update_at") or 0),
         })
     return items
 
@@ -792,8 +883,12 @@ def build_query(keyword: str, mode: str) -> str:
     return " ".join(w if w[0] in "+-" or mode == "or" else "+" + w for w in words)
 
 
+# 「收藏排序：多取几页」时，前 POOL_PAGES 页的结果先合在一起按收藏排好再分页
+POOL_PAGES = 5
+
+
 def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False,
-                  mode: str = "and") -> dict:
+                  mode: str = "and", fav: str = "page") -> dict:
     """第 page 页固定对应搜索结果里的第 (page-1)*15+1 ~ page*15 条。
 
     这样可以直接跳到任意页（只取那几条所在的禁漫分页），总页数也是准的。
@@ -831,9 +926,11 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
     total = state["total"] or len(first)
     pages = max(1, -(-total // PAGE_SIZE))
 
-    # 本页对应的原始位置 [start, end)，换算成要取禁漫的哪几页
-    start = (page - 1) * PAGE_SIZE
-    end = min(start + PAGE_SIZE, total)
+    # 本页对应的原始位置 [start, end)，换算成要取禁漫的哪几页。
+    # 收藏排序选了「多取几页」的话，前几页一律取整个池子，排好序再切出本页
+    pooled = fav == "pool" and page <= POOL_PAGES
+    start = 0 if pooled else (page - 1) * PAGE_SIZE
+    end = min(POOL_PAGES * PAGE_SIZE if pooled else start + PAGE_SIZE, total)
     window: list[dict] = []
     if end > start:
         for n in range(start // size + 1, (end - 1) // size + 2):
@@ -842,9 +939,16 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
 
     blocked = blocked_ids()
     bad_tags = blocked_tags()
+    bad_authors = blocked_authors()
+    favorites = load_favorites()
+    fav_tags = {norm_tag(t) for t in favorites["tags"]}
+    fav_authors = {norm_tag(a) for a in favorites["authors"]}
 
     def hit_tags(it: dict) -> list[str]:
         return [t for t in it.get("tags") or [] if norm_tag(t) in bad_tags]
+
+    def author_bad(it: dict) -> bool:
+        return bool(author_keys(it.get("author")) & bad_authors)
 
     if show_blocked:
         # 显示已拉黑的：照常返回、标出原因。标签只用已缓存的（不为了标记去联网），
@@ -855,14 +959,28 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
                     cached = _INFO_CACHE.get(it["id"])
                 if cached:
                     it["tags"] = list(cached.get("tags") or [])
-        shown = [dict(it, blocked=it["id"] in blocked, blocked_tags=hit_tags(it))
+        shown = [dict(it, blocked=it["id"] in blocked, blocked_tags=hit_tags(it),
+                      blocked_author=author_bad(it))
                  for it in window]
     else:
-        shown = [it for it in window if it["id"] not in blocked]
+        shown = [it for it in window if it["id"] not in blocked and not author_bad(it)]
         if bad_tags:
             # 搜索接口不返回标签，只好把本页这几本的标签查一下（有缓存）
             _fill_tags([it for it in shown if not it.get("tags_checked")])
             shown = [it for it in shown if not hit_tags(it)]
+    hidden = len(window) - len(shown) if not show_blocked else 0
+
+    # 按收藏排序：命中的收藏标签越多越前，一样多的有收藏作者的更前，再按原来的顺序
+    if fav_tags:
+        _fill_tags([it for it in shown if not it.get("tags_checked")])
+    for it in shown:
+        it["fav_tags"] = [t for t in it.get("tags") or [] if norm_tag(t) in fav_tags]
+        it["fav_author"] = bool(author_keys(it.get("author")) & fav_authors)
+    if fav_tags or fav_authors:
+        shown.sort(key=lambda it: (-len(it["fav_tags"]), -it["fav_author"]))   # sort 是稳定的
+    if pooled:
+        shown = shown[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+        hidden = 0
     return {
         "items": shown,
         "total": total,
@@ -871,8 +989,114 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
         "page_size": PAGE_SIZE,
         "has_more": page < pages,
         # 本页原本有多少条、被拉黑滤掉了几条，界面上说明为什么这页不足 15 本
-        "hidden": len(window) - len(shown) if not show_blocked else 0,
+        "hidden": hidden,
     }
+
+
+# --------------------------------------------------------------------------
+# 动态：收藏作者的新本、和收藏标签最搭的新本
+# --------------------------------------------------------------------------
+FEED_TTL = 3600            # 结果缓存一小时，下拉 / 点刷新才强制重查
+FEED_DAYS = 30
+FEED_MAX_AUTHORS = 30      # 收藏太多时只查前面这些，免得一次发几十个请求
+FEED_MAX_TAGS = 10
+FEED_TAG_CANDIDATES = 40   # 标签那部分最多查这么多本的标签来算重合度
+_FEED_LOCK = threading.Lock()
+
+
+def load_feed() -> dict:
+    if FEED_PATH.exists():
+        try:
+            return json.loads(FEED_PATH.read_text("utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_feed(data: dict) -> None:
+    FEED_PATH.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+
+
+def _latest(method, query: str) -> list[dict]:
+    """某个作者 / 标签一个月内的最新一页。查不到就当没有，不影响别的。"""
+    try:
+        result = method(search_query=query, page=1,
+                        order_by=jmcomic.JmMagicConstants.ORDER_BY_LATEST,
+                        time=jmcomic.JmMagicConstants.TIME_MONTH)
+        return _parse_results(result)
+    except Exception:
+        return []
+
+
+def build_feed(with_tags: bool, force: bool = False) -> dict:
+    fav = load_favorites()
+    sig = json.dumps([fav["authors"][:FEED_MAX_AUTHORS], fav["tags"][:FEED_MAX_TAGS], with_tags],
+                     ensure_ascii=False)
+    with _FEED_LOCK:
+        cache = load_feed()
+        seen = cache.get("seen", [])
+        fresh = time.time() - cache.get("built_at", 0) < FEED_TTL and cache.get("sig") == sig
+        if fresh and not force:
+            return dict(cache, new=[x["id"] for x in cache.get("authors", []) if x["id"] not in seen])
+
+    client = OPTION.new_jm_client()
+    since = time.time() - FEED_DAYS * 86400
+    blocked = blocked_ids()
+    bad_tags = blocked_tags()
+    bad_authors = blocked_authors()
+    fav_tags = {norm_tag(t) for t in fav["tags"]}
+
+    def keep(it: dict) -> bool:
+        if it["id"] in blocked or author_keys(it.get("author")) & bad_authors:
+            return False
+        if it.get("tags_checked") and any(norm_tag(t) in bad_tags for t in it["tags"]):
+            return False
+        # 没有时间的（接口偶尔不给）也留着，交给禁漫的「一个月内」筛选
+        return not it["updated"] or it["updated"] >= since
+
+    # 收藏作者：各查一次，合并去重，按更新时间从新到旧
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = list(pool.map(lambda a: _latest(client.search_author, a), fav["authors"][:FEED_MAX_AUTHORS]))
+    by_id: dict[str, dict] = {}
+    for items in pages:
+        for it in items:
+            by_id.setdefault(it["id"], it)
+    authors = list(by_id.values())
+    if bad_tags:
+        _fill_tags(authors)
+    authors = sorted([it for it in authors if keep(it)], key=lambda it: -it["updated"])
+
+    # 收藏标签：各查一次，取最新的一批算和收藏标签的重合个数
+    tags: list[dict] = []
+    if with_tags and fav_tags:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pages = list(pool.map(lambda t: _latest(client.search_tag, t), fav["tags"][:FEED_MAX_TAGS]))
+        cand: dict[str, dict] = {}
+        for items in pages:
+            for it in items:
+                if it["id"] not in by_id:
+                    cand.setdefault(it["id"], it)
+        pool_items = sorted(cand.values(), key=lambda it: -it["updated"])[:FEED_TAG_CANDIDATES]
+        _fill_tags(pool_items)
+        for it in pool_items:
+            it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
+        tags = sorted([it for it in pool_items if it["fav_tags"] and keep(it)],
+                      key=lambda it: (-len(it["fav_tags"]), -it["updated"]))
+
+    data = {"built_at": time.time(), "sig": sig, "authors": authors, "tags": tags, "seen": seen}
+    with _FEED_LOCK:
+        data["seen"] = load_feed().get("seen", seen)
+        save_feed(data)
+    return dict(data, new=[x["id"] for x in authors if x["id"] not in data["seen"]])
+
+
+def mark_feed_seen(ids: list[str]) -> None:
+    with _FEED_LOCK:
+        data = load_feed()
+        seen = data.get("seen", [])
+        seen = [*seen, *[i for i in ids if i not in seen]][-2000:]   # 只记最近这些，文件别越长越大
+        data["seen"] = seen
+        save_feed(data)
 
 
 # --------------------------------------------------------------------------
@@ -1020,6 +1244,9 @@ def export_backup(body: dict) -> dict:
         "groups": load_groups(),
         "blacklist": load_blacklist()["items"],
         "blacklist_tags": load_blacklist()["tags"],
+        "blacklist_authors": load_blacklist()["authors"],
+        "favorites": load_favorites(),
+        "notes": load_notes(),
         # 只存书目不存图片：换手机后可以照着这份清单重新下载
         "shelf": shelf,
         "progress": _clean_numbers(body.get("progress")),
@@ -1034,34 +1261,68 @@ def export_backup(body: dict) -> dict:
             "size": path.stat().st_size, "books": len(shelf)}
 
 
-def export_jm_list(ids: list[str] | None = None) -> dict:
-    """导出 JM 号单：纯文本，每行"JM号<Tab>标题<Tab>作者"。
+# 号单里的分段名，导入时按这些认
+LIST_SECTIONS = {
+    "shelf": "书架",
+    "black-books": "黑名单·本子", "black-tags": "黑名单·标签", "black-authors": "黑名单·作者",
+    "fav-tags": "收藏·标签", "fav-authors": "收藏·作者",
+}
 
-    用纯文本是为了能直接贴进聊天软件、用记事本打开；导入时只认 JM 号，
-    标题作者只是方便人看，也让导入页离线时也能先显示出书名。
+
+def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = True) -> dict:
+    """导出号单：纯文本，按「[书架]」「[黑名单·标签]」这样分段。
+
+    用纯文本是为了能直接贴进聊天软件、用记事本打开。书架、黑名单本子每行只写 JM 号
+    （标题导入时再查），加了星的在行首标 ★；标签、作者名单每行一个。
+    parts 选导出哪几块：shelf / black / fav。
     """
-    books = build_shelf()
-    if ids:
-        keep = set(ids)
-        books = [b for b in books if b["id"] in keep]
+    parts = set(parts or ["shelf"])
 
     def one_line(text: str) -> str:
         return re.sub(r"[\t\r\n]+", " ", str(text or "")).strip()
 
+    sections: list[tuple[str, list[str]]] = []
+    count = 0
+    if "shelf" in parts:
+        books = build_shelf()
+        if ids:
+            keep = set(ids)
+            books = [b for b in books if b["id"] in keep]
+        count = len(books)
+        sections.append(("shelf", [("★" if b.get("starred") else "") + f"JM{b['id']}" for b in books]))
+    if "black" in parts:
+        bl = load_blacklist()
+        sections += [
+            ("black-books", [f"JM{x['id']}" for x in bl["items"]]),
+            ("black-tags", [one_line(t) for t in bl["tags"]]),
+            ("black-authors", [one_line(a) for a in bl["authors"]]),
+        ]
+    if "fav" in parts:
+        fav = load_favorites()
+        sections += [
+            ("fav-tags", [one_line(t) for t in fav["tags"]]),
+            ("fav-authors", [one_line(a) for a in fav["authors"]]),
+        ]
+    sections = [(k, rows) for k, rows in sections if rows]
+    total = sum(len(rows) for _, rows in sections)
+
     lines = [
-        f"# JM下载器 JM 号单 · {time.strftime('%Y-%m-%d %H:%M')} · 共 {len(books)} 本",
-        "# 每行一本：JM号<Tab>标题<Tab>作者。导入时只认 JM 号",
+        f"# JM下载器 号单 · {time.strftime('%Y-%m-%d %H:%M')}",
+        "# 每行一个：JM 号前面有 ★ 的是加了星；标签、作者名单每行一个。导入时按 [分段] 认",
     ]
-    lines += ["\t".join([f"JM{b['id']}", one_line(b["name"]), one_line(b["author"])])
-              for b in books]
+    for key, rows in sections:
+        lines += ["", f"[{LIST_SECTIONS[key]}]", *rows]
     text = "\n".join(lines) + "\n"
 
-    # 和备份放同一个目录：安卓上这个目录已经配置成可以通过系统分享发出去
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    name = time.strftime("jm-list-%Y%m%d-%H%M%S.txt")
-    path = BACKUP_DIR / name
-    path.write_text(text, "utf-8")
-    return {"path": str(path), "name": name, "count": len(books), "text": text}
+    out = {"count": count, "total": total, "text": text}
+    if to_file:
+        # 和备份放同一个目录：安卓上这个目录已经配置成可以通过系统分享发出去
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        name = time.strftime("jm-list-%Y%m%d-%H%M%S.txt")
+        path = BACKUP_DIR / name
+        path.write_text(text, "utf-8")
+        out.update(path=str(path), name=name)
+    return out
 
 
 def import_backup(data: dict) -> dict:
@@ -1104,7 +1365,28 @@ def import_backup(data: dict) -> dict:
             if t and norm_tag(t) not in known_tags:
                 cur_bl["tags"].append(t)
                 known_tags.add(norm_tag(t))
+        cur_bl["authors"] = _clean_names([*cur_bl["authors"], *(data.get("blacklist_authors") or [])])
         save_blacklist(cur_bl)
+
+    fav_in = data.get("favorites") if isinstance(data.get("favorites"), dict) else {}
+    with _FAVORITES_LOCK:
+        fav = load_favorites()
+        fav["tags"] = _clean_names([*fav["tags"], *(fav_in.get("tags") or [])])
+        fav["authors"] = _clean_names([*fav["authors"], *(fav_in.get("authors") or [])])
+        for x in fav_in.get("books") or []:
+            x = re.sub(r"\D", "", str(x))
+            if x and x not in fav["books"]:
+                fav["books"].append(x)
+        save_favorites(fav)
+
+    notes_in = data.get("notes") if isinstance(data.get("notes"), dict) else {}
+    with _NOTES_LOCK:
+        notes = load_notes()
+        for k, v in notes_in.items():
+            k = re.sub(r"\D", "", str(k))
+            if k and str(v).strip() and k not in notes:   # 本机已有的笔记不覆盖
+                notes[k] = str(v).strip()[:2000]
+        save_notes(notes)
 
     local = {b["id"] for b in build_shelf()}
     missing = []
@@ -1207,6 +1489,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/blacklist":
             return self.send_json(load_blacklist())
 
+        if path == "/api/favorites":
+            return self.send_json(load_favorites())
+
+        if path == "/api/feed":
+            with_tags = (query.get("tags") or ["1"])[0] == "1"
+            force = (query.get("force") or ["0"])[0] == "1"
+            try:
+                data = build_feed(with_tags, force)
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 502)
+            data.pop("seen", None)
+            data.pop("sig", None)
+            return self.send_json(data)
+
         if path == "/api/tasks":
             with TASKS_LOCK:
                 tasks = [t.as_dict() for t in TASKS.values()]
@@ -1225,7 +1521,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 show_blocked = (query.get("show_blocked") or ["0"])[0] == "1"
                 mode = (query.get("mode") or ["and"])[0]
-                return self.send_json(search_albums(keyword, kind, page, show_blocked, mode))
+                fav = (query.get("fav") or ["page"])[0]
+                return self.send_json(search_albums(keyword, kind, page, show_blocked, mode, fav))
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
 
@@ -1333,7 +1630,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self.body_json()
             raw = body.get("ids") if isinstance(body.get("ids"), list) else None
             ids = [x for x in (re.sub(r"\D", "", str(v)) for v in raw or []) if x]
-            return self.send_json(export_jm_list(ids or None))
+            parts = body.get("parts") if isinstance(body.get("parts"), list) else None
+            return self.send_json(export_jm_list(ids or None, parts, bool(body.get("file", True))))
 
         if path == "/api/backup/import":
             res = import_backup(self.body_json())
@@ -1402,6 +1700,49 @@ class Handler(BaseHTTPRequestHandler):
                 save_blacklist(data)
             return self.send_json(data)
 
+        if path == "/api/feed/seen":
+            ids = [re.sub(r"\D", "", str(x)) for x in self.body_json().get("ids") or []]
+            mark_feed_seen([x for x in ids if x])
+            return self.send_json({"ok": True})
+
+        if path == "/api/names":
+            # 黑名单 / 收藏里的标签、作者批量加减：{list: black|fav, kind: tags|authors, add: [], remove: []}
+            body = self.body_json()
+            which, kind = body.get("list"), body.get("kind")
+            if which not in ("black", "fav") or kind not in ("tags", "authors"):
+                return self.send_json({"error": "参数不对"}, 400)
+            change_names(which, kind, body.get("add"), body.get("remove"))
+            return self.send_json({"blacklist": load_blacklist(), "favorites": load_favorites()})
+
+        if path == "/api/star":
+            body = self.body_json()   # 请求体只能读一次
+            album_id = re.sub(r"\D", "", str(body.get("id", "")))
+            on = bool(body.get("on"))
+            if not album_id or not (DOWNLOAD_DIR / album_id).is_dir():
+                return self.send_json({"error": "只能给已下载的本子加星"}, 400)
+            with _FAVORITES_LOCK:
+                fav = load_favorites()
+                fav["books"] = [x for x in fav["books"] if x != album_id]
+                if on:
+                    fav["books"].insert(0, album_id)
+                save_favorites(fav)
+            return self.send_json({"ok": True, "starred": on})
+
+        if path == "/api/note":
+            body = self.body_json()
+            album_id = re.sub(r"\D", "", str(body.get("id", "")))
+            text = str(body.get("text", "")).strip()[:2000]
+            if not album_id:
+                return self.send_json({"error": "缺少漫画 id"}, 400)
+            with _NOTES_LOCK:
+                notes = load_notes()
+                if text:
+                    notes[album_id] = text
+                else:
+                    notes.pop(album_id, None)
+                save_notes(notes)
+            return self.send_json({"ok": True, "note": text})
+
         if path == "/api/blacklist/remove":
             album_id = re.sub(r"\D", "", str(self.body_json().get("id", "")))
             with _BLACKLIST_LOCK:
@@ -1468,6 +1809,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = load_groups()
                 if data["assign"].pop(album_dir.name, None) is not None:
                     save_groups(data)
+            with _FAVORITES_LOCK:
+                fav = load_favorites()
+                if album_dir.name in fav["books"]:
+                    fav["books"].remove(album_dir.name)
+                    save_favorites(fav)
             return self.send_json({"ok": True})
         self.send_json({"error": "not found"}, 404)
 

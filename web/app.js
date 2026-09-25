@@ -31,6 +31,8 @@ const ICONS = {
   share: 'M12 15V3M8 7l4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7',
   play: 'M8 5.5v13l10.5-6.5z',
   next: 'M9 6l6 6-6 6',
+  bell: 'M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
+  star: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z',
 };
 
 function svg(name, size = 22) {
@@ -68,7 +70,9 @@ const PREF_DEFAULTS = {
   'jm-pet': '1',
   'jm-mask': '0',
   'jm-mask-allow': '',
-  'jm-search-mode': 'and',   // 多个关键字：and 同时包含 / or 包含其一
+  'jm-search-mode': 'and',
+  'jm-fav-sort': 'page',
+  'jm-feed-tags': '1',       // 动态页显示和收藏标签最搭的新本     // 搜索按收藏排序：page 只排当前页 / pool 前几页合起来排   // 多个关键字：and 同时包含 / or 包含其一
 };
 
 function pref(key) {
@@ -85,6 +89,7 @@ function setPref(key, value) {
   if (key === 'jm-mask' && window.maskApply) maskApply();
   if (key === 'jm-mask-allow' && window.maskAllow) maskAllow();
   if (key === 'jm-search-mode') applySearchMode();
+  if (key === 'jm-feed-tags') feedStale = true;
 }
 
 // 切到后台时最近任务里不显示 App 画面
@@ -182,6 +187,7 @@ function switchView(name, push = true) {
     if (!$('#search-results').children.length) renderHistory();
     showTip('download');
   }
+  if (name === 'feed') openFeed();
   if (push) history.pushState({ view: name }, '');
 }
 
@@ -392,7 +398,7 @@ function visibleBooks() {
     const hit = (b, w) => {
       // 允许输 "jm123" 这种带前缀的写法
       const idQuery = w.replace(/^jm/, '');
-      return [b.name, b.author, ...(b.tags || [])]
+      return [b.name, b.author, b.note, ...(b.tags || [])]
         .some((s) => String(s || '').toLowerCase().includes(w))
         || (idQuery && b.id.includes(idQuery));
     };
@@ -401,7 +407,9 @@ function visibleBooks() {
       && must.every((w) => hit(b, w))
       && (!plain.length || (any ? plain.some((w) => hit(b, w)) : plain.every((w) => hit(b, w)))));
   }
-  return [...books].sort(SORTERS[shelfSort] || SORTERS.added);
+  // 加了星的排最前，然后才按选的排序方式
+  const sorter = SORTERS[shelfSort] || SORTERS.added;
+  return [...books].sort((a, b) => (b.starred - a.starred) || sorter(a, b));
 }
 
 async function resumeDownload(id, btn) {
@@ -438,11 +446,25 @@ function renderShelf() {
         <div class="title"></div>
         <div class="author"></div>
         <div class="btags"></div>
+        <div class="bnote"></div>
         <div class="bfoot">
           <span class="jmid"></span>
         </div>
       </div>`;
     const cover = el.querySelector('.cover');
+
+    // 封面左上角的星星（中心压在封面的角上）：点一下加星 / 去星，不触发打开详情或长按多选
+    const star = document.createElement('button');
+    star.className = 'star' + (book.starred ? ' on' : '');
+    star.innerHTML = svg('star', 16);
+    star.title = book.starred ? '去掉星标' : '加星（排到最前）';
+    star.setAttribute('aria-label', star.title);
+    star.addEventListener('pointerdown', (e) => e.stopPropagation());
+    star.onclick = (e) => { e.stopPropagation(); setStar(book.id, !book.starred); };
+    el.appendChild(star);   // 封面会裁掉超出的部分，所以挂在卡片上
+
+    const noteEl = el.querySelector('.bnote');
+    if (book.note) noteEl.textContent = book.note; else noteEl.remove();
     const foot = el.querySelector('.bfoot');
     el.querySelector('img').src = book.cover;
     el.querySelector('.title').textContent = book.name;
@@ -682,14 +704,58 @@ let blockedIds = new Set();
 
 let blacklistTags = [];
 let blockedTagSet = new Set();
+let blacklistAuthors = [];
+let blockedAuthorSet = new Set();
 const normTag = (t) => String(t || '').trim().toLowerCase();
 
-async function loadBlacklist() {
-  const res = await api.get('/api/blacklist');
+// 作者字段可能写着好几个人（「甲、乙」），拆开来一个个比对；和服务端 author_keys 一致
+const authorKeys = (a) => {
+  const text = String(a || '');
+  return [text, ...text.split(/[、,，/／&＆;；]+/)].map(normTag).filter(Boolean);
+};
+const hasAuthor = (set, a) => authorKeys(a).some((k) => set.has(k));
+
+function applyBlacklist(res) {
   blockedIds = new Set((res.items || []).map((x) => x.id));
   blacklistTags = res.tags || [];
   blockedTagSet = new Set(blacklistTags.map(normTag));
+  blacklistAuthors = res.authors || [];
+  blockedAuthorSet = new Set(blacklistAuthors.map(normTag));
+}
+
+async function loadBlacklist() {
+  const res = await api.get('/api/blacklist');
+  applyBlacklist(res);
   return res.items || [];
+}
+
+/* ---- 收藏：标签、作者（搜索时排前面、动态页追更新） ---- */
+let favTags = [];
+let favTagSet = new Set();
+let favAuthors = [];
+let favAuthorSet = new Set();
+
+function applyFavorites(res) {
+  favTags = res.tags || [];
+  favTagSet = new Set(favTags.map(normTag));
+  favAuthors = res.authors || [];
+  favAuthorSet = new Set(favAuthors.map(normTag));
+}
+
+async function loadFavorites() {
+  applyFavorites(await api.get('/api/favorites'));
+}
+
+// 黑名单 / 收藏里的标签、作者一次加减一批，改完把界面上的标记刷新一遍
+async function setNames(list, kind, add = [], remove = []) {
+  const res = await api.post('/api/names', { list, kind, add, remove });
+  if (res.error) { toast(res.error); return false; }
+  applyBlacklist(res.blacklist);
+  applyFavorites(res.favorites);
+  markAllCards();
+  markDetailTags();
+  updateNameCounts();
+  return true;
 }
 
 async function openBlacklistSheet() {
@@ -748,78 +814,70 @@ function markCard(albumId, blocked) {
   }
 }
 
-/* ---- 标签拉黑 ---- */
-// 标签按钮：点一下搜这个标签，长按拉黑 / 解除拉黑
+/* ---- 标签按钮：点一下按这个标签搜。拉黑 / 收藏改到搜索卡片上的按钮里挑 ---- */
 function bindTagPress(btn, tag, onTap) {
-  let timer = null;
-  let start = null;
-  let long = false;
-  const cancel = () => { clearTimeout(timer); timer = null; };
-  btn.addEventListener('pointerdown', (e) => {
-    long = false;
-    start = { x: e.clientX, y: e.clientY };
-    timer = setTimeout(() => {
-      timer = null;
-      long = true;
-      if (navigator.vibrate) navigator.vibrate(12);
-      askBlockTag(tag);
-    }, 480);
-  });
-  btn.addEventListener('pointermove', (e) => {
-    if (timer && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
-  });
-  btn.addEventListener('pointerup', cancel);
-  btn.addEventListener('pointercancel', cancel);
-  btn.addEventListener('contextmenu', (e) => e.preventDefault());
   btn.onclick = (e) => {
     e.stopPropagation();
-    if (long) { long = false; return; }   // 长按松手那一下不算点击
     onTap();
   };
 }
 
-async function askBlockTag(tag) {
-  if (blockedTagSet.has(normTag(tag))) {
-    if (!await confirmDialog({ title: `解除拉黑标签「${tag}」？`, ok: '解除' })) return;
-    await setTagBlocked(tag, false);
-    toast('已解除拉黑');
-    return;
-  }
-  if (!await confirmDialog({
-    title: `拉黑标签「${tag}」？`,
-    message: '之后搜索结果里带这个标签的本子都不显示。书架上已下载的不受影响。',
-    ok: '拉黑', danger: true,
-  })) return;
-  await setTagBlocked(tag, true);
-  snackbar(`已拉黑标签「${tag}」`, '撤销', () => setTagBlocked(tag, false));
+// 给已下载的本子加星 / 去星：书架上排最前
+async function setStar(id, on) {
+  const res = await api.post('/api/star', { id, on });
+  if (res.error) { toast(res.error); return false; }
+  const book = shelfItems.find((b) => b.id === id);
+  if (book) book.starred = on;
+  renderShelf();
+  if (!(window.petStarred && petStarred(on, book))) toast(on ? '已加星，排到书架最前' : '已去掉星标');
+  return true;
+}
+
+// 笔记只存在本机；空的就删掉
+async function saveNote(id, text) {
+  const res = await api.post('/api/note', { id, text });
+  if (res.error) { toast(res.error); return false; }
+  const book = shelfItems.find((b) => b.id === id);
+  if (book) book.note = res.note;
+  renderShelf();
+  return true;
 }
 
 async function setTagBlocked(tag, on) {
-  await api.post(on ? '/api/blacklist/tag/add' : '/api/blacklist/tag/remove', { tag });
-  await loadBlacklist();
-  markAllCards();           // 当前结果原地标出来 / 还原，下次搜索才会真的隐藏
-  markDetailTags();
+  // 当前结果原地标出来 / 还原，下次搜索才会真的隐藏
+  await setNames('black', 'tags', on ? [tag] : [], on ? [] : [tag]);
 }
 
-// 按卡片上已知的标签，标出"含拉黑标签"
+// 按卡片上已知的标签、作者，标出拉黑的原因和收藏的标签 / 作者
 function markTagBlocked(card) {
   let tags = [];
   try { tags = JSON.parse(card.dataset.tags || '[]'); } catch (_) {}
   const hits = tags.filter((t) => blockedTagSet.has(normTag(t)));
-  card.classList.toggle('tagblocked', hits.length > 0);
+  const authorEl = card.querySelector('.author');
+  const authorBad = !!authorEl && hasAuthor(blockedAuthorSet, authorEl.textContent);
+  const why = [];
+  if (authorBad) why.push('作者已拉黑');
+  if (hits.length) why.push('含拉黑标签：' + hits.join('、'));
+  card.classList.toggle('tagblocked', why.length > 0);
   let reason = card.querySelector('.blkreason');
-  if (hits.length) {
+  if (why.length) {
     if (!reason) {
       reason = document.createElement('span');
       reason.className = 'blkreason';
       card.querySelector('.cover').appendChild(reason);
     }
-    reason.textContent = '含拉黑标签：' + hits.join('、');
+    reason.textContent = why.join('；');
   } else if (reason) {
     reason.remove();
   }
-  card.querySelectorAll('.tag').forEach((b) =>
-    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent))));
+  if (authorEl) {
+    authorEl.classList.toggle('bad', authorBad);
+    authorEl.classList.toggle('fav', hasAuthor(favAuthorSet, authorEl.textContent));
+  }
+  card.querySelectorAll('.tag').forEach((b) => {
+    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent)));
+    b.classList.toggle('fav', favTagSet.has(normTag(b.textContent)));
+  });
 }
 
 function markAllCards() {
@@ -827,14 +885,149 @@ function markAllCards() {
 }
 
 function markDetailTags() {
-  $$('.detail-tags .tag').forEach((b) =>
-    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent))));
+  $$('.detail-tags .tag').forEach((b) => {
+    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent)));
+    b.classList.toggle('fav', favTagSet.has(normTag(b.textContent)));
+  });
 }
 
-async function openTagBlacklistSheet() {
-  await loadBlacklist();
-  $('#sheet-title').textContent = `标签黑名单（${blacklistTags.length}）`;
-  $('#mine-tagblack-count').textContent = blacklistTags.length ? `${blacklistTags.length} 个` : '空';
+/* ---- 搜索卡片上的「拉黑」「收藏」：弹窗里勾这本的作者、标签（拉黑还能勾这一本） ---- */
+async function openPickSheet(list, item) {
+  const black = list === 'black';
+  let tags = null;
+  const card = $$('.card').find((c) => c.dataset.id === item.id);
+  if (card && card.dataset.tags) {
+    try { tags = JSON.parse(card.dataset.tags); } catch (_) {}
+  }
+  if (!tags) {
+    // 卡片的标签还没加载，先现查一下
+    const info = await api.get('/api/info?id=' + encodeURIComponent(item.id)).catch(() => ({}));
+    tags = info.tags || [];
+  }
+  const tagSet = black ? blockedTagSet : favTagSet;
+  const authorSet = black ? blockedAuthorSet : favAuthorSet;
+
+  $('#sheet-title').textContent = black ? '拉黑' : '收藏';
+  const body = $('#sheet-body');
+  body.innerHTML = '';
+  const picks = [];   // { kind, name, was, chip }
+
+  const section = (title, entries) => {
+    if (!entries.length) return;
+    const h = document.createElement('p');
+    h.className = 'pick-title';
+    h.textContent = title;
+    const box = document.createElement('div');
+    box.className = 'pickchips';
+    for (const [kind, name, was, preset] of entries) {
+      const chip = document.createElement('button');
+      chip.className = 'pickchip';
+      chip.textContent = name;
+      const pick = { kind, name, was, chip };
+      chip.classList.toggle('on', preset);
+      chip.onclick = () => chip.classList.toggle('on');
+      picks.push(pick);
+      box.appendChild(chip);
+    }
+    body.append(h, box);
+  };
+
+  if (black) section('这一本', [['book', item.name || ('JM' + item.id), blockedIds.has(item.id), true]]);
+  if (item.author) {
+    const was = hasAuthor(authorSet, item.author);
+    section('作者', [['authors', item.author, was, was]]);
+  }
+  section('标签', tags.map((t) => {
+    const was = tagSet.has(normTag(t));
+    return ['tags', t, was, was];
+  }));
+
+  const tip = document.createElement('p');
+  tip.className = 'hint';
+  tip.textContent = black
+    ? '点一下选中 / 取消。拉黑的作者、标签，之后搜索时带它们的本子都不显示；已拉黑的取消勾选就是解除。'
+    : '点一下选中 / 取消。收藏的标签越多、有收藏作者的本子，搜索时排得越前；收藏的作者出新本会出现在「动态」里。';
+  body.appendChild(tip);
+
+  const row = document.createElement('div');
+  row.className = 'sheet-actions';
+  const ok = document.createElement('button');
+  ok.className = black ? 'primary danger' : 'primary';
+  ok.textContent = black ? '确定拉黑' : '保存收藏';
+  ok.onclick = async () => {
+    ok.disabled = true;
+    const diff = { tags: { add: [], remove: [] }, authors: { add: [], remove: [] } };
+    let bookChange = null;
+    for (const p of picks) {
+      const on = p.chip.classList.contains('on');
+      if (on === p.was) continue;
+      if (p.kind === 'book') bookChange = on;
+      else diff[p.kind][on ? 'add' : 'remove'].push(p.name);
+    }
+    for (const kind of ['tags', 'authors']) {
+      if (diff[kind].add.length || diff[kind].remove.length) {
+        await setNames(list, kind, diff[kind].add, diff[kind].remove);
+      }
+    }
+    if (bookChange !== null) await toggleBlock(item, true);
+    $('#sheet').classList.add('hidden');
+    const added = [...diff.tags.add, ...diff.authors.add];
+    const n = added.length + (bookChange ? 1 : 0);
+    if (!n && !diff.tags.remove.length && !diff.authors.remove.length && bookChange === null) return;
+    if (black) {
+      toast(n ? `已拉黑 ${n} 项，下次搜索起不再显示` : '已更新黑名单');
+    } else if (!(added.length && window.petFavorited
+      && petFavorited({ tags: diff.tags.add, authors: diff.authors.add }))) {
+      toast(added.length ? `已收藏 ${added.length} 项` : '已更新收藏');
+    }
+  };
+  row.appendChild(ok);
+  body.appendChild(row);
+  $('#sheet').classList.remove('hidden');
+}
+
+/* ---- 名单弹层：标签黑名单、作者黑名单、收藏的标签、收藏的作者共用 ---- */
+const NAME_LISTS = {
+  'black-tags': {
+    list: 'black', kind: 'tags', title: '标签黑名单', unit: '个', count: '#mine-tagblack-count',
+    placeholder: '输入要拉黑的标签', tip: '点一下移出黑名单。',
+    empty: '还没有拉黑任何标签。在搜索结果里点「拉黑」，可以挑这本的标签拉黑。',
+  },
+  'black-authors': {
+    list: 'black', kind: 'authors', title: '作者黑名单', unit: '位', count: '#mine-authorblack-count',
+    placeholder: '输入要拉黑的作者', tip: '点一下移出黑名单。',
+    empty: '还没有拉黑任何作者。在搜索结果里点「拉黑」，可以把这本的作者拉黑。',
+  },
+  'fav-tags': {
+    list: 'fav', kind: 'tags', title: '收藏的标签', unit: '个', count: '#mine-favtags-count',
+    placeholder: '输入要收藏的标签', tip: '点一下取消收藏。搜索时带这些标签越多的本子排得越前。',
+    empty: '还没有收藏标签。在搜索结果里点「收藏」，可以挑喜欢的标签。',
+  },
+  'fav-authors': {
+    list: 'fav', kind: 'authors', title: '收藏的作者', unit: '位', count: '#mine-favauthors-count',
+    placeholder: '输入要收藏的作者', tip: '点一下取消收藏。搜索时这些作者的本子排在前面，「动态」里能看到他们的新本。',
+    empty: '还没有收藏作者。在搜索结果里点「收藏」，可以收藏这本的作者。',
+  },
+};
+const namesOf = (key) => ({
+  'black-tags': blacklistTags, 'black-authors': blacklistAuthors,
+  'fav-tags': favTags, 'fav-authors': favAuthors,
+})[key];
+
+function updateNameCounts() {
+  for (const [key, cfg] of Object.entries(NAME_LISTS)) {
+    const n = namesOf(key).length;
+    const el = $(cfg.count);
+    if (el) el.textContent = n ? `${n} ${cfg.unit}` : '空';
+  }
+}
+
+async function openNameSheet(key) {
+  const cfg = NAME_LISTS[key];
+  await Promise.all([loadBlacklist(), loadFavorites()]);
+  const names = namesOf(key);
+  updateNameCounts();
+  $('#sheet-title').textContent = `${cfg.title}（${names.length}）`;
   const body = $('#sheet-body');
   body.innerHTML = '';
 
@@ -842,18 +1035,18 @@ async function openTagBlacklistSheet() {
   row.className = 'input-row';
   const input = document.createElement('input');
   input.type = 'text';
-  input.maxLength = 40;
-  input.placeholder = '输入要拉黑的标签';
+  input.maxLength = 60;
+  input.placeholder = cfg.placeholder;
   const add = document.createElement('button');
   add.className = 'primary icon-only';
   add.innerHTML = svg('plus', 20);
   add.title = '添加';
   add.setAttribute('aria-label', '添加');
   const submit = async () => {
-    const tag = input.value.trim();
-    if (!tag) return toast('请输入标签');
-    await setTagBlocked(tag, true);
-    openTagBlacklistSheet();
+    const name = input.value.trim();
+    if (!name) return toast(cfg.placeholder.replace('输入', '请输入'));
+    await setNames(cfg.list, cfg.kind, [name]);
+    openNameSheet(key);
   };
   add.onclick = submit;
   input.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
@@ -862,26 +1055,24 @@ async function openTagBlacklistSheet() {
 
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = blacklistTags.length
-    ? '点标签移出黑名单。也可以在搜索结果或详情页里长按标签来拉黑。'
-    : '还没有拉黑任何标签。在搜索结果或详情页里长按标签也能拉黑。';
+  tip.textContent = names.length ? cfg.tip : cfg.empty;
   body.appendChild(tip);
 
-  if (blacklistTags.length) {
+  if (names.length) {
     const chips = document.createElement('div');
     chips.className = 'tagchips';
-    for (const tag of blacklistTags) {
+    for (const name of names) {
       const chip = document.createElement('button');
       chip.className = 'tagchip';
       chip.innerHTML = '<span></span>' + svg('close', 14);
-      chip.querySelector('span').textContent = tag;
-      chip.title = '移出黑名单';
+      chip.querySelector('span').textContent = name;
+      chip.title = cfg.list === 'black' ? '移出黑名单' : '取消收藏';
       chip.onclick = async () => {
-        await setTagBlocked(tag, false);
-        openTagBlacklistSheet();
-        snackbar(`已移出「${tag}」`, '撤销', async () => {
-          await setTagBlocked(tag, true);
-          if (!$('#sheet').classList.contains('hidden')) openTagBlacklistSheet();
+        await setNames(cfg.list, cfg.kind, [], [name]);
+        openNameSheet(key);
+        snackbar(`已移出「${name}」`, '撤销', async () => {
+          await setNames(cfg.list, cfg.kind, [name]);
+          if (!$('#sheet').classList.contains('hidden')) openNameSheet(key);
         });
       };
       chips.appendChild(chip);
@@ -975,8 +1166,8 @@ function makeCopyable(el, text, guard) {
 // 这些操作界面上没有显眼的按钮，不说就发现不了；每条只提示一次
 const TIPS = {
   shelf: '长按一本可以多选：批量分组、删除、导出号单。在书架顶部往下拉可以刷新。',
-  detail: '点作者名可以复制，方便去搜这个作者的其他作品。长按标签可以拉黑它。',
-  tagblock: '长按任意标签可以拉黑它，之后带这个标签的本子就不会出现在搜索结果里。',
+  detail: '点作者名可以复制，方便去搜这个作者的其他作品。',
+  tagblock: '点「拉黑」可以挑这一本、作者、标签一起拉黑；点「收藏」可以收藏喜欢的作者和标签，之后带这些的本子搜索时排在前面。',
   download: '直接输入 JM 号就能下载，多个号用空格隔开；也可以按标题、作者、标签搜索。',
   'reader-scroll': '双指缩放，双击放大 / 还原，点一下显示或隐藏菜单。右上角可以切换成翻页模式。',
   'reader-ltr': '点屏幕右侧下一页、左侧上一页，中间呼出菜单；也可以左右滑动或按音量键。',
@@ -1102,8 +1293,12 @@ async function openDetail(id, push = true) {
     <div class="actions">
       <button class="primary" id="btn-read"></button>
       <button class="ghost hidden" id="btn-resume">继续下载</button>
+      <button class="ghost icon-only" id="btn-star">${svg('star', 20)}</button>
       <button class="ghost icon-only" id="btn-group" title="移动到分组" aria-label="移动到分组">${svg('folder', 20)}</button>
       <button class="ghost icon-only" id="btn-delete" title="删除这本" aria-label="删除这本">${svg('trash', 20)}</button>
+    </div>
+    <div class="note-box">
+      <textarea id="detail-note" rows="2" maxlength="2000" placeholder="写点笔记……（只存在这台设备上）"></textarea>
     </div>
     <div id="chapter-list"></div>`;
 
@@ -1140,7 +1335,7 @@ async function openDetail(id, push = true) {
     const btn = document.createElement('button');
     btn.className = 'tag' + (blockedTagSet.has(normTag(tag)) ? ' bad' : '');
     btn.textContent = tag;
-    // 和搜索结果一致：点一下去搜这个标签，长按拉黑
+    // 和搜索结果一致：点一下去搜这个标签
     bindTagPress(btn, tag, () => {
       switchView('download');
       $('#search-input').value = tag;
@@ -1164,6 +1359,24 @@ async function openDetail(id, push = true) {
   $('#btn-read').onclick = () => openReader(data.id, saved || 0);
   $('#btn-group').onclick = () => openGroupSheet(data.id, group);
   $('#btn-delete').onclick = () => removeAlbum(data.id, data.name);
+
+  const starBtn = $('#btn-star');
+  const paintStar = () => {
+    const on = !!(book && book.starred);
+    starBtn.classList.toggle('starred', on);
+    starBtn.title = on ? '去掉星标' : '加星（书架上排到最前）';
+    starBtn.setAttribute('aria-label', starBtn.title);
+  };
+  paintStar();
+  starBtn.onclick = async () => {
+    if (!book) return toast('只能给已下载的本子加星');
+    if (await setStar(data.id, !book.starred)) paintStar();
+  };
+
+  // 笔记：离开输入框就存
+  const note = $('#detail-note');
+  note.value = (book && book.note) || '';
+  note.onchange = () => saveNote(data.id, note.value.trim());
 
   const list = $('#chapter-list');
   let offset = 0;
@@ -2008,14 +2221,14 @@ let searchForce = false;   // 上次是不是「纯数字也按关键字搜」
 
 function renderTags(box, tags) {
   box.innerHTML = '';
-  // 拉黑命中的标签排前面，否则可能正好被截掉看不到原因
-  const sorted = [...tags].sort((a, b) =>
-    blockedTagSet.has(normTag(b)) - blockedTagSet.has(normTag(a)));
+  // 拉黑、收藏命中的标签排前面，否则可能正好被截掉看不到
+  const rank = (t) => blockedTagSet.has(normTag(t)) * 2 + favTagSet.has(normTag(t));
+  const sorted = [...tags].sort((a, b) => rank(b) - rank(a));
   for (const tag of sorted.slice(0, 6)) {
     const btn = document.createElement('button');
     btn.className = 'tag';
     btn.textContent = tag;
-    // 点一下按这个标签再搜，和禁漫站内一样；长按拉黑
+    // 点一下按这个标签再搜，和禁漫站内一样
     bindTagPress(btn, tag, () => {
       $('#search-input').value = tag;
       setKind('tag');
@@ -2060,9 +2273,15 @@ function makeCard(item) {
       <div class="author"></div>
       <div class="tags"></div>
       <button class="dl">下载</button>
-      <button class="${blocked ? 'unblock' : 'block'}">${blocked ? '解除拉黑' : '拉黑'}</button>
+      <div class="acts">
+        <button class="${blocked ? 'unblock' : 'block'}">${blocked ? '解除拉黑' : '拉黑'}</button>
+        <button class="favbtn">收藏</button>
+      </div>
     </div>`;
-  card.querySelector('.block, .unblock').onclick = () => toggleBlock(item);
+  // 已拉黑的一点就解除；没拉黑的弹窗挑要拉黑什么（这一本 / 作者 / 标签）
+  card.querySelector('.block, .unblock').onclick = () =>
+    (blockedIds.has(item.id) ? toggleBlock(item) : openPickSheet('black', item));
+  card.querySelector('.favbtn').onclick = () => openPickSheet('fav', item);
 
   const img = card.querySelector('img');
   img.src = item.cover;
@@ -2199,12 +2418,13 @@ async function doSearch(page = 1, forceKeyword = false) {
   renderSearchSkeleton();
   $('#view-download').scrollTop = 0;
 
-  // 拉黑状态可能在别处改过，取一次保证按钮显示正确
-  await loadBlacklist();
+  // 拉黑、收藏可能在别处改过，取一次保证按钮和标记显示正确
+  await Promise.all([loadBlacklist(), loadFavorites()]);
 
   searchForce = forceKeyword;
   const res = await api.get('/api/search?q=' + encodeURIComponent(searchQuery)
     + '&kind=' + searchKind + '&page=' + searchPage + '&mode=' + pref('jm-search-mode')
+    + '&fav=' + pref('jm-fav-sort')
     + '&show_blocked=' + pref('jm-show-blocked'));
   box.innerHTML = '';
 
@@ -2424,12 +2644,15 @@ $('#drawer').addEventListener('click', (e) => {
   if (e.target === $('#drawer')) closeDrawer();   // 点遮罩关掉
 });
 $('#mine-blacklist').onclick = openBlacklistSheet;
-$('#mine-tagblack').onclick = openTagBlacklistSheet;
+$('#mine-tagblack').onclick = () => openNameSheet('black-tags');
+$('#mine-authorblack').onclick = () => openNameSheet('black-authors');
+$('#mine-favtags').onclick = () => openNameSheet('fav-tags');
+$('#mine-favauthors').onclick = () => openNameSheet('fav-authors');
 
 async function refreshMine() {
-  const items = await loadBlacklist();
+  const [items] = await Promise.all([loadBlacklist(), loadFavorites()]);
   $('#mine-blacklist-count').textContent = items.length ? `${items.length} 本` : '空';
-  $('#mine-tagblack-count').textContent = blacklistTags.length ? `${blacklistTags.length} 个` : '空';
+  updateNameCounts();
   $('#mine-storage-size').textContent = '计算中…';
   const s = await api.get('/api/storage');
   $('#mine-storage-size').textContent = formatSize(s.books_total + s.cache);
@@ -2665,6 +2888,106 @@ $('#sel-delete').onclick = async () => {
   });
 })();
 
+/* ------------------------------------------------------------ 动态 */
+// 收藏作者一个月内的新本，和（可选）跟收藏标签最搭的新本。服务端缓存一小时
+let feedData = null;
+let feedStale = true;
+let feedLoading = false;
+
+function feedCard(item, withScore) {
+  const card = makeCard(item);
+  const info = card.querySelector('.info');
+  const when = document.createElement('div');
+  when.className = 'upd';
+  when.textContent = (item.updated ? timeAgo(item.updated * 1000) + '更新' : '一个月内更新')
+    + (withScore && item.fav_tags ? ` · 命中 ${item.fav_tags.length} 个收藏标签` : '');
+  info.insertBefore(when, info.querySelector('.tags'));
+  return card;
+}
+
+function renderFeed() {
+  const data = feedData || { authors: [], tags: [] };
+  const withTags = pref('jm-feed-tags') === '1';
+  const hint = $('#feed-hint');
+  const authorsBox = $('#feed-authors');
+  const tagsBox = $('#feed-tags');
+  authorsBox.innerHTML = '';
+  tagsBox.innerHTML = '';
+  data.authors.forEach((it) => authorsBox.appendChild(feedCard(it, false)));
+  data.tags.forEach((it) => tagsBox.appendChild(feedCard(it, true)));
+
+  $('#feed-authors-title').classList.toggle('hidden', !favAuthors.length);
+  $('#feed-tags-title').classList.toggle('hidden', !withTags || !favTags.length);
+  if (!favAuthors.length && !(withTags && favTags.length)) {
+    hint.textContent = '还没有收藏作者或标签。在搜索结果里点「收藏」，收藏的作者出新本会出现在这里。';
+  } else if (!data.authors.length && !data.tags.length) {
+    hint.textContent = '近 30 天没有新本';
+  } else {
+    hint.textContent = feedData && feedData.built_at ? `${timeAgo(feedData.built_at * 1000)}更新 · 点右上角刷新` : '';
+  }
+}
+
+async function loadFeed(force = false) {
+  if (feedLoading) return;
+  feedLoading = true;
+  if (force || !feedData) {
+    $('#feed-hint').textContent = '正在查收藏作者的新本……';
+    if (!feedData) renderSearchSkeletonIn($('#feed-authors'));
+  }
+  try {
+    const res = await api.get(`/api/feed?tags=${pref('jm-feed-tags') === '1' ? 1 : 0}&force=${force ? 1 : 0}`);
+    if (res.error) {
+      $('#feed-hint').textContent = '获取失败：' + res.error;
+      return;
+    }
+    feedData = res;
+    feedStale = false;
+    renderFeed();
+  } finally {
+    feedLoading = false;
+  }
+}
+
+async function openFeed() {
+  await Promise.all([loadBlacklist(), loadFavorites()]);
+  if (feedStale || !feedData) await loadFeed(false);
+  else renderFeed();
+  // 进了动态页就算看过了：红点消掉，这些新本不再提醒
+  if (feedData && feedData.authors.length) {
+    api.post('/api/feed/seen', { ids: feedData.authors.map((x) => x.id) });
+  }
+  $('#feed-dot').classList.remove('on');
+}
+$('#feed-refresh').onclick = () => loadFeed(true);
+
+// 骨架屏：复用搜索结果的占位卡片
+function renderSearchSkeletonIn(box) {
+  box.innerHTML = '';
+  for (let k = 0; k < 3; k++) {
+    const c = document.createElement('div');
+    c.className = 'card ghostcard';
+    c.innerHTML = '<div class="cover skeleton"></div><div class="info">'
+      + '<div class="line skeleton"></div><div class="line skeleton short"></div></div>';
+    box.appendChild(c);
+  }
+}
+
+// App 开着的时候，隔一阵看看收藏的作者有没有出新本：底栏「动态」亮红点，看板娘提醒
+async function checkFeed() {
+  if (!favAuthors.length || currentView === 'feed') return;
+  const res = await api.get(`/api/feed?tags=${pref('jm-feed-tags') === '1' ? 1 : 0}`).catch(() => null);
+  if (!res || res.error) return;
+  feedData = res;
+  feedStale = false;
+  const fresh = res.authors.filter((x) => (res.new || []).includes(x.id));
+  if (!fresh.length) return;
+  $('#feed-dot').classList.add('on');
+  if (window.petFeed && petFeed(fresh)) return;
+  snackbar(`收藏的作者出了 ${fresh.length} 本新本`, '去看看', () => switchView('feed'), 8000);
+}
+setTimeout(async () => { await loadFavorites(); checkFeed(); }, 6000);
+setInterval(checkFeed, 3 * 3600 * 1000);
+
 /* ------------------------------------------------------------ 设置页 */
 async function openSettings() {
   switchView('settings');
@@ -2744,37 +3067,115 @@ async function copyText(text) {
 }
 
 // ids 为空导出整个书架；多选时只导出选中的
-async function exportJmList(ids) {
-  const res = await api.post('/api/list/export', ids ? { ids } : {});
-  if (res.error) return toast(res.error);
-  if (!res.count) return toast('书架是空的，没什么可导出');
-
-  $('#sheet-title').textContent = `已导出 ${res.count} 本`;
+// 导出号单：先勾要导出的内容，再选「复制文字」（换设备最方便）或「分享 / 保存文件」
+function exportJmList(ids) {
+  $('#sheet-title').textContent = ids ? `导出选中的 ${ids.length} 本` : '导出号单';
   const body = $('#sheet-body');
   body.innerHTML = '';
+
+  const parts = [
+    ['shelf', ids ? '选中的书（JM 号）' : '书架（JM 号）', true],
+    ['black', '黑名单（本子 · 标签 · 作者）', !ids],
+    ['fav', '收藏名单（标签 · 作者）', !ids],
+  ];
+  const boxes = document.createElement('div');
+  boxes.className = 'pickchips';
+  for (const [key, label, on] of parts) {
+    const chip = document.createElement('button');
+    chip.className = 'pickchip' + (on ? ' on' : '');
+    chip.dataset.part = key;
+    chip.textContent = label;
+    chip.onclick = () => chip.classList.toggle('on');
+    boxes.appendChild(chip);
+  }
+  body.appendChild(boxes);
+
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = hasNative('shareFile')
-    ? '可以把文件发到聊天软件或网盘，也可以直接复制文字发给别人。'
-    : `已保存到 ${res.path}，也可以直接复制文字。`;
+  tip.textContent = '「复制文字」直接复制到剪贴板，发到另一台设备后，在那边「导入号单」里粘贴就行。';
   body.appendChild(tip);
+
+  const chosen = () => $$('#sheet-body .pickchip.on').map((c) => c.dataset.part);
+  const build = async (file) => {
+    const sel = chosen();
+    if (!sel.length) { toast('至少选一项'); return null; }
+    const res = await api.post('/api/list/export', { ids: ids || undefined, parts: sel, file });
+    if (res.error) { toast(res.error); return null; }
+    if (!res.total) { toast('选中的内容都是空的，没什么可导出'); return null; }
+    return res;
+  };
 
   const row = document.createElement('div');
   row.className = 'sheet-actions';
-  if (hasNative('shareFile')) {
-    const share = document.createElement('button');
-    share.className = 'primary';
-    share.textContent = '分享文件';
-    share.onclick = () => native('shareFile', res.path);
-    row.appendChild(share);
-  }
   const copy = document.createElement('button');
-  copy.className = hasNative('shareFile') ? 'ghost' : 'primary';
+  copy.className = 'primary';
   copy.textContent = '复制文字';
-  copy.onclick = async () => toast((await copyText(res.text)) ? '已复制' : '复制失败');
-  row.appendChild(copy);
+  copy.onclick = async () => {
+    const res = await build(false);
+    if (res) toast((await copyText(res.text)) ? `已复制 ${res.total} 条` : '复制失败');
+  };
+  const file = document.createElement('button');
+  file.className = 'ghost';
+  file.textContent = hasNative('shareFile') ? '分享文件' : '保存文件';
+  file.onclick = async () => {
+    const res = await build(true);
+    if (!res) return;
+    if (hasNative('shareFile')) {
+      native('shareFile', res.path);
+    } else {
+      // 网页版：直接让浏览器下载这个文本
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([res.text], { type: 'text/plain;charset=utf-8' }));
+      a.download = res.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast(`已保存 ${res.name}`);
+    }
+  };
+  row.append(file, copy);
   body.appendChild(row);
   $('#sheet').classList.remove('hidden');
+}
+
+// 号单按「[书架]」「[黑名单·标签]」分段；没有分段的旧号单整段当书架
+const LIST_SECTIONS = {
+  书架: 'shelf',
+  '黑名单·本子': 'black-books', '黑名单·标签': 'black-tags', '黑名单·作者': 'black-authors',
+  '收藏·标签': 'fav-tags', '收藏·作者': 'fav-authors',
+};
+function parseImport(text) {
+  const chunks = { shelf: [] };
+  let cur = 'shelf';
+  let sectioned = false;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const head = raw.trim().match(/^\[(.+?)\]/);
+    if (head && LIST_SECTIONS[head[1].trim()]) {
+      cur = LIST_SECTIONS[head[1].trim()];
+      sectioned = true;
+      chunks[cur] = chunks[cur] || [];
+      continue;
+    }
+    (chunks[cur] = chunks[cur] || []).push(raw);
+  }
+  const lines = (key) => (chunks[key] || []).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  // 书架段：行首 ★ 是加了星
+  const stars = new Set();
+  const shelfText = (sectioned ? lines('shelf') : String(text || '').split(/\r?\n/)).map((l) => {
+    const m = l.match(/^\s*★\s*(?:jm)?\s*(\d+)/i);
+    if (m) stars.add(m[1]);
+    return l.replace(/^\s*★/, '');
+  }).join('\n');
+  return {
+    books: parseJmList(shelfText),
+    stars,
+    names: {
+      'black-books': parseJmList(lines('black-books').join('\n')),
+      'black-tags': lines('black-tags'),
+      'black-authors': lines('black-authors'),
+      'fav-tags': lines('fav-tags'),
+      'fav-authors': lines('fav-authors'),
+    },
+  };
 }
 
 /**
@@ -2821,11 +3222,11 @@ function parseJmList(text) {
 }
 
 function openListImportSheet() {
-  $('#sheet-title').textContent = '导入 JM 号单';
+  $('#sheet-title').textContent = '导入号单';
   const body = $('#sheet-body');
   body.innerHTML = '';
   const ta = document.createElement('textarea');
-  ta.placeholder = '把号单或者带 JM 号的文字粘贴到这里，\n也可以直接选一个号单文件';
+  ta.placeholder = '把另一台设备「复制文字」得到的号单粘贴到这里，\n也可以直接选一个号单文件。\n书、黑名单、收藏名单都会先给你预览，挑着导入';
   body.appendChild(ta);
 
   const row = document.createElement('div');
@@ -2859,10 +3260,102 @@ function importState(id) {
   return { ok: true, tag: '' };
 }
 
-function showImportList(text) {
-  const items = parseJmList(text || '');
-  if (!items.length) return toast('没认出 JM 号');
+// 号单里的名单部分：{ 'black-tags': [...], ... }，以及书架里加了星的
+let importNames = {};
+let importStars = new Set();
+const importNamePick = new Set();   // 选中要导入的名单项：「分组|名字」
+
+const IMPORT_NAME_TITLES = {
+  'black-books': '黑名单 · 本子', 'black-tags': '黑名单 · 标签', 'black-authors': '黑名单 · 作者',
+  'fav-tags': '收藏 · 标签', 'fav-authors': '收藏 · 作者',
+};
+// 这一项本机是不是已经有了
+function nameHad(key, v) {
+  if (key === 'black-books') return blockedIds.has(v.id);
+  if (key === 'black-tags') return blockedTagSet.has(normTag(v));
+  if (key === 'black-authors') return blockedAuthorSet.has(normTag(v));
+  if (key === 'fav-tags') return favTagSet.has(normTag(v));
+  return favAuthorSet.has(normTag(v));
+}
+const nameKey = (key, v) => key + '|' + (key === 'black-books' ? v.id : v);
+
+function renderImportNames() {
+  const box = $('#import-names');
+  box.innerHTML = '';
+  const keys = Object.keys(IMPORT_NAME_TITLES).filter((k) => (importNames[k] || []).length);
+  box.classList.toggle('hidden', !keys.length);
+  if (!keys.length) return;
+  for (const key of keys) {
+    const h = document.createElement('p');
+    h.className = 'pick-title';
+    h.textContent = `${IMPORT_NAME_TITLES[key]}（${importNames[key].length}）`;
+    const chips = document.createElement('div');
+    chips.className = 'pickchips';
+    for (const v of importNames[key]) {
+      const chip = document.createElement('button');
+      const had = nameHad(key, v);
+      const k = nameKey(key, v);
+      chip.className = 'pickchip' + (had ? ' had' : importNamePick.has(k) ? ' on' : '');
+      chip.textContent = (key === 'black-books' ? (v.name || 'JM' + v.id) : v) + (had ? '（已有）' : '');
+      chip.disabled = had;
+      chip.onclick = () => {
+        if (importNamePick.has(k)) importNamePick.delete(k); else importNamePick.add(k);
+        renderImportNames();
+      };
+      chips.appendChild(chip);
+    }
+    box.append(h, chips);
+  }
+  const n = importNamePick.size;
+  const go = document.createElement('button');
+  go.className = 'primary wide';
+  go.textContent = n ? `导入选中的名单（${n} 项）` : '没有要导入的名单';
+  go.disabled = !n;
+  go.onclick = importPickedNames;
+  box.appendChild(go);
+}
+
+async function importPickedNames() {
+  const pick = (key) => (importNames[key] || []).filter((v) => importNamePick.has(nameKey(key, v)));
+  for (const [key, list, kind] of [
+    ['black-tags', 'black', 'tags'], ['black-authors', 'black', 'authors'],
+    ['fav-tags', 'fav', 'tags'], ['fav-authors', 'fav', 'authors'],
+  ]) {
+    const add = pick(key);
+    if (add.length) await setNames(list, kind, add);
+  }
+  for (const b of pick('black-books')) {
+    await api.post('/api/blacklist/add', { id: b.id, name: b.name });
+  }
+  const n = importNamePick.size;
+  importNamePick.clear();
+  await loadBlacklist();
+  // 号单里加了星、而本机已经下载了的书，顺手加上星
+  for (const id of importStars) {
+    const book = shelfItems.find((b) => b.id === id);
+    if (book && !book.starred) await api.post('/api/star', { id, on: true });
+  }
+  await loadShelf();
+  toast(`已导入 ${n} 项名单`);
+  renderImportNames();
+  renderImportList();
+}
+
+async function showImportList(text) {
+  const parsed = parseImport(text || '');
+  const items = parsed.books;
+  const nameCount = Object.values(parsed.names).reduce((n, l) => n + l.length, 0);
+  if (!items.length && !nameCount) return toast('没认出 JM 号或名单');
   closeSheet();
+  await Promise.all([loadBlacklist(), loadFavorites()]);
+  importNames = parsed.names;
+  importStars = parsed.stars;
+  importNamePick.clear();
+  // 名单里本机还没有的默认全选
+  for (const [key, list] of Object.entries(importNames)) {
+    for (const v of list) if (!nameHad(key, v)) importNamePick.add(nameKey(key, v));
+  }
+  renderImportNames();
   importItems = items;
   importSel.clear();
   // 能下的默认全选：导入号单通常就是为了把缺的补上
@@ -2956,9 +3449,10 @@ function renderImportList() {
 
   const total = importItems.length;
   $('#import-title').textContent = `导入号单（${total}）`;
-  $('#import-hint').textContent = blocked
-    ? `共 ${total} 本，其中 ${blocked} 本已有或正在下载，已灰掉`
-    : `共 ${total} 本，都还没有`;
+  $('#import-hint').textContent = !total ? '号单里没有书，只有名单'
+    : blocked ? `共 ${total} 本，其中 ${blocked} 本已有或正在下载，已灰掉`
+      : `共 ${total} 本，都还没有`;
+  $('#import-bar').classList.toggle('hidden', !total);
   $('#import-count').textContent = `已选 ${importSel.size} 本`;
   $('#imp-download').disabled = importSel.size === 0;
 }
@@ -3004,6 +3498,7 @@ history.replaceState({ view: 'shelf' }, '');
 applyPrivacy();
 updateViewButton();
 loadShelf();
+loadFavorites();   // 搜索排序、卡片上的收藏标记要用
 loadBlacklist();
 pollTasks();
 checkPending();

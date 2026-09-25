@@ -57,15 +57,16 @@
     + `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 
   const buttons = [];
-  for (const sel of ['#shelf-top', '#view-download .topbar', '#view-tasks .topbar', '#view-mine .topbar',
-    '#view-detail .topbar', '#view-import .topbar']) {
+  for (const sel of ['#shelf-top', '#view-download .topbar', '#view-tasks .topbar', '#view-feed .topbar',
+    '#view-mine .topbar', '#view-detail .topbar', '#view-import .topbar']) {
     const bar = $(sel);
     if (!bar) continue;
     const b = document.createElement('button');
     b.className = 'icon-btn mask-btn';
     b.onclick = () => setPref('jm-mask', masked() ? '0' : '1');
     // 书架顶栏右边已有切换视图按钮，插在它前面；其他顶栏放最右
-    const before = sel === '#shelf-top' ? $('#btn-view') : sel === '#view-import .topbar' ? $('#imp-all') : null;
+    const before = { '#shelf-top': $('#btn-view'), '#view-import .topbar': $('#imp-all'),
+      '#view-feed .topbar': $('#feed-refresh') }[sel] || null;
     bar.insertBefore(b, before);
     buttons.push(b);
   }

@@ -7,11 +7,14 @@ backups/
 # 构建出来的安装包
 *.apk
 
-# 个人数据：设置、黑名单、分组、下载队列（第一次启动会自动生成）
+# 个人数据：设置、黑名单、分组、下载队列、收藏、笔记、动态缓存（第一次启动会自动生成）
 config.json
 blacklist.json
 groups.json
 queue.json
+favorites.json
+notes.json
+feed.json
 
 # Python 缓存、本地工具配置
 __pycache__/

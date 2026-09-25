@@ -101,6 +101,19 @@
   </div>
 </section>
 
+<!-- 动态：收藏作者的新本 -->
+<section id="view-feed" class="view">
+  <header class="topbar">
+    <h1>动态</h1>
+    <button id="feed-refresh" class="icon-btn" aria-label="刷新" title="刷新"><span data-icon="refresh"></span></button>
+  </header>
+  <p id="feed-hint" class="hint center"></p>
+  <h2 class="section-title feed-title" id="feed-authors-title">收藏作者的新本 · 近 30 天</h2>
+  <div id="feed-authors" class="cards"></div>
+  <h2 class="section-title feed-title" id="feed-tags-title">和你收藏的标签最搭的新本</h2>
+  <div id="feed-tags" class="cards"></div>
+</section>
+
 <!-- 我的 -->
 <section id="view-mine" class="view">
   <header class="topbar"><h1>我的</h1></header>
@@ -120,19 +133,34 @@
       <span class="value" id="mine-tagblack-count"></span>
       <span class="arrow">›</span>
     </button>
+    <button class="menu-item" id="mine-authorblack">
+      <span class="label">作者黑名单</span>
+      <span class="value" id="mine-authorblack-count"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-favtags">
+      <span class="label">收藏的标签</span>
+      <span class="value" id="mine-favtags-count"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-favauthors">
+      <span class="label">收藏的作者</span>
+      <span class="value" id="mine-favauthors-count"></span>
+      <span class="arrow">›</span>
+    </button>
     <button class="menu-item" id="mine-storage">
       <span class="label">存储空间</span>
       <span class="value" id="mine-storage-size"></span>
       <span class="arrow">›</span>
     </button>
     <button class="menu-item" id="mine-list-export">
-      <span class="label">导出 JM 号单</span>
-      <span class="value">分享给别人或换设备用</span>
+      <span class="label">导出号单</span>
+      <span class="value">书 · 黑名单 · 收藏，可复制文字</span>
       <span class="arrow">›</span>
     </button>
     <button class="menu-item" id="mine-list-import">
-      <span class="label">导入 JM 号单</span>
-      <span class="value">挑着批量下载</span>
+      <span class="label">导入号单</span>
+      <span class="value">粘贴文字或选文件</span>
       <span class="arrow">›</span>
     </button>
     <button class="menu-item" id="mine-export">
@@ -157,6 +185,7 @@
     <button id="imp-all" class="icon-btn" aria-label="全选" title="全选"><span data-icon="selectAll"></span></button>
   </header>
   <p id="import-hint" class="hint center"></p>
+  <div id="import-names" class="import-names hidden"></div>
   <div id="import-list" class="grid"></div>
   <div id="import-bar" class="actionbar">
     <span id="import-count">已选 0 本</span>
@@ -201,6 +230,17 @@
           <option value="60">60 · 很小</option><option value="70">70</option>
           <option value="80">80 · 推荐</option><option value="90">90</option>
           <option value="95">95 · 接近原图</option>
+        </select>
+      </label>
+      <label class="menu-item setting">
+        <span class="label">动态里显示「最搭的新本」<small>按收藏的标签找一个月内的新本，标签重合越多越靠前。收藏的标签多时刷新会慢一些</small></span>
+        <input type="checkbox" class="switch" data-pref="jm-feed-tags">
+      </label>
+      <label class="menu-item setting">
+        <span class="label">收藏排序范围<small>搜索时收藏的标签、作者排前面。「前 5 页一起排」能把后面的收藏本子提上来，但每次新搜索要多等十几秒（要逐本查标签）</small></span>
+        <select data-pref="jm-fav-sort">
+          <option value="page">只排当前页</option>
+          <option value="pool">前 5 页一起排</option>
         </select>
       </label>
       <label class="menu-item setting stack">
@@ -319,6 +359,7 @@
   <button class="tab active" data-goto="shelf"><span data-icon="books"></span>书架</button>
   <button class="tab" data-goto="download"><span data-icon="search"></span>下载</button>
   <button class="tab" data-goto="tasks"><span data-icon="download"></span>任务<i id="task-dot"></i></button>
+  <button class="tab" data-goto="feed"><span data-icon="bell"></span>动态<i id="feed-dot"></i></button>
   <button class="tab" data-goto="mine"><span data-icon="user"></span>我的</button>
   <!-- 看板娘：站在底栏上，底栏藏起来她也跟着藏 -->
   <div id="pet-stage" aria-hidden="true">

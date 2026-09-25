@@ -1599,7 +1599,8 @@ body.immersive .popmenu { display: none; }
   right: 0;
   bottom: calc(100% - 4px);
   height: calc(var(--pet-h) + 90px);
-  overflow: hidden;
+  /* 只裁掉底栏以下（她钻进底栏的动画要用），上面不裁，长气泡往上长也不会被切 */
+  clip-path: inset(-100vh 0 0 0);
   pointer-events: none;
 }
 #pet {
@@ -1829,3 +1830,117 @@ body.masked .mw-all::after { transform: none; }
 /* ---------- 多关键字搜索模式 ---------- */
 .mode-row { align-items: center; margin-top: 8px; }
 .mode-row .mode-label { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
+
+/* ---------- 搜索卡片：拉黑 / 收藏 ---------- */
+.card .acts { display: flex; gap: 6px; }
+.card .acts > button { flex: 1; min-width: 0; margin-top: 6px; }
+.card .favbtn {
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.card .favbtn:active { opacity: .7; }
+.card .acts .unblock { height: 28px; margin-top: 6px; }
+.tag, .tagchip, .pickchip { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.card .tag.fav,
+.detail-tags .tag.fav { background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)); color: var(--accent); }
+.card .author.fav::before { content: '★ '; }
+.card .author.bad { text-decoration: line-through; opacity: .5; }
+
+/* 拉黑 / 收藏弹窗里的可选小块 */
+.pick-title { margin: 12px 2px 6px; font-size: 12.5px; color: var(--muted); }
+.pickchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.pickchip {
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pickchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.primary.danger { background: #e0445a; }
+
+/* ---------- 书架：星标、笔记 ---------- */
+.book { position: relative; }
+/* 星星的中心压在封面左上角：列表视图封面离卡片边 10px，封面墙是 0 */
+.book > .star {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #0006;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.grid.wall .book > .star { left: -13px; top: -13px; }
+.book .star { box-shadow: 0 1px 4px #0005; }
+.book .star svg { width: 15px; height: 15px; }
+.book .star.on { background: #0009; color: #ffc93c; }
+.book .star.on svg path { fill: currentColor; }
+.book .flag { top: auto; bottom: 10px; }   /* 左上角让给星星 */
+.book .bnote {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.book .bnote::before { content: '✎ '; }
+.grid.wall .book .bnote { display: none; }
+#btn-star.starred { color: #ffc93c; }
+#btn-star.starred svg path { fill: currentColor; }
+.detail .note-box { margin: 14px 0 4px; }
+.detail .note-box textarea {
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  resize: vertical;
+  outline: none;
+}
+.detail .note-box textarea:focus { border-color: var(--accent); }
+
+/* ---------- 导入页：名单 ---------- */
+.import-names { margin: 0 16px 14px; padding: 4px 14px 14px; border-radius: 14px; background: var(--surface); }
+.import-names .primary.wide { display: block; width: 100%; margin: 14px 0 0; }
+.pickchip.had { opacity: .45; cursor: default; }
+
+/* ---------- 动态 ---------- */
+#feed-dot { display: none; }
+#feed-dot.on {
+  display: block;
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  margin-left: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.feed-title { margin-top: 14px; }
+#view-feed .topbar h1 + .mask-btn { margin-left: auto; }
+.card .upd { font-size: 11.5px; color: var(--muted); }

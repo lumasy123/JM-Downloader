@@ -213,6 +213,18 @@
     if (mentioned.length > 6) mentioned.shift();
   }
 
+  // 收藏的标签、作者里挑一个来聊（最近提过的先让一让）。标签同样只说中性的那些
+  function favPicks() {
+    const tags = ((typeof favTags !== 'undefined' && favTags) || [])
+      .map((t) => TAG_NAMES[String(t).trim()]).filter(Boolean);
+    const authors = (typeof favAuthors !== 'undefined' && favAuthors) || [];
+    const fresh = (list) => {
+      const f = list.filter((x) => !mentioned.includes(x));
+      return pick(f.length ? f : list) || null;
+    };
+    return { tag: fresh(tags), author: fresh(authors) };
+  }
+
   function shelfComment() {
     const books = (typeof shelfItems !== 'undefined' && shelfItems) || [];
     if (!books.length) return null;
@@ -236,11 +248,17 @@
     if (unread) add('unread', { n: unread });
     const pages = books.reduce((n, b) => n + (b.pages || 0), 0);
     if (pages > 500) add('pages', { n: pages });
+    // 收藏的放两份，比「书架上多的」更容易被说到
+    const fav = favPicks();
+    for (let k = 0; k < 2; k++) {
+      if (fav.tag) add('favTag', { tag: fav.tag });
+      if (fav.author) add('favAuthor', { author: fav.author });
+    }
     if (!ideas.length) return null;
     const choice = pick(ideas);
     // 真正说出口的才算提过
     const said = Object.values(choice[1]);
-    for (const name of [tag, hot, author]) if (name && said.includes(name)) remember(name);
+    for (const name of [tag, hot, author, fav.tag, fav.author]) if (name && said.includes(name)) remember(name);
     return choice;
   }
   let lastComment = '';
@@ -267,10 +285,15 @@
     books.forEach((b) => b.author && authors.set(b.author, (authors.get(b.author) || 0) + 1));
     const [author, authorN] = pickPopular([...authors]);
     if (author) S('tapAuthor').forEach((line) => ideas.push([line, { author, n: authorN }]));
+    const fav = favPicks();
+    for (let k = 0; k < 2; k++) {
+      if (fav.tag) S('favTag').forEach((line) => ideas.push([line, { tag: fav.tag }]));
+      if (fav.author) S('favAuthor').forEach((line) => ideas.push([line, { author: fav.author }]));
+    }
     const choice = pick(ideas);
     if (!choice) return false;
     const said = Object.values(choice[1]);
-    for (const name of [tag, author]) if (name && said.includes(name)) remember(name);
+    for (const name of [tag, author, fav.tag, fav.author]) if (name && said.includes(name)) remember(name);
     speak(choice[0], choice[1]);
     return true;
   }
@@ -493,6 +516,40 @@
   let running = 0;
   let primed = false;
   const seen = new Map();   // id -> 上次看到的状态
+  /* ---------------- 收藏、加星、收藏作者出新本：她来说。不在屏幕上时返回 false，交给普通提示 */
+  window.petFavorited = function petFavorited({ tags = [], authors = [] }) {
+    if (!visible() || sticky) return false;
+    active();
+    const n = tags.length + authors.length;
+    // 能念出名字的：作者，和中性的标签
+    const say = [...authors, ...tags.map((t) => TAG_NAMES[String(t).trim()]).filter(Boolean)];
+    act('hop', 500);
+    if (n === 1 && say.length === 1) speak(pick(L('favAdd')), { name: say[0] });
+    else if (n > 1) speak(pick(L('favAddMany')), { n });
+    else speak(pick(L('favAddQuiet')));
+    return true;
+  };
+
+  window.petStarred = function petStarred(on, book) {
+    if (!visible() || sticky) return false;
+    active();
+    speak(pick(L(on ? 'starOn' : 'starOff')), { name: short((book && book.name) || '这本') });
+    return true;
+  };
+
+  window.petFeed = function petFeed(items) {
+    if (!visible() || sticky || !items.length) return false;
+    active();
+    const go = { label: '去看看', run: () => switchView('feed') };
+    act('happy', 1000);
+    if (items.length === 1) {
+      speak(pick(L('feedNew')), { author: items[0].author, name: short(items[0].name) }, 4200, go);
+    } else {
+      speak(pick(L('feedNewMany')), { n: items.length }, 4200, go);
+    }
+    return true;
+  };
+
   window.petTasks = function petTasks(tasks) {
     const busy = tasks.filter((t) => t.status === 'running' || t.status === 'queued').length;
     const events = [];

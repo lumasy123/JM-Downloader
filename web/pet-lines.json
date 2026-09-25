@@ -35,7 +35,16 @@
       "shelf.unread": "没翻开过的本数 {n}",
       "shelf.pages": "书架总页数 {n}",
       "shelf.tapTag": "点她时拿书架上多的标签说 {tag} {n}",
-      "shelf.tapAuthor": "点她时拿收得多的作者说 {author} {n}"
+      "shelf.tapAuthor": "点她时拿收得多的作者说 {author} {n}",
+      "favAdd": "收藏了一个作者 / 标签 {name}",
+      "favAddMany": "一次收藏好几个 {n}",
+      "favAddQuiet": "收藏了不方便念出名字的标签",
+      "starOn": "书架上加星 {name}",
+      "starOff": "去掉星标 {name}",
+      "feedNew": "收藏的作者出了一本新本 {author} {name}，气泡带「去看看」",
+      "feedNewMany": "收藏的作者出了好几本新本 {n}，气泡带「去看看」",
+      "shelf.favTag": "看漫画 / 点她时聊收藏的标签 {tag}（只说中性标签）",
+      "shelf.favAuthor": "看漫画 / 点她时聊收藏的作者 {author}"
   },
   "tap": [
     ["wave", "嗨~找我有事吗？"],
@@ -220,6 +229,39 @@
     ["read-flip", "（偷偷翻回上一页）"],
     ["peek", "……好、好厉害。我是说画工！画工！"]
   ],
+  "favAdd": [
+    ["happy", "收藏了「{name}」？眼光不错嘛~"],
+    ["tease", "「{name}」……原来你喜欢这种的呀~"],
+    ["ok", "记下了！以后「{name}」的本子帮你排前面。"],
+    ["giggle", "又多了一个心头好，嘿嘿~"]
+  ],
+  "favAddMany": [
+    ["happy", "一下收藏了 {n} 个，胃口不小嘛~"],
+    ["ok", "{n} 个都记下啦，搜索时帮你排前面！"],
+    ["tease", "{n} 个一起收藏……今晚想看的有点多哦~"]
+  ],
+  "favAddQuiet": [
+    ["ok", "记下了！以后帮你排前面~"],
+    ["tease", "嗯哼……这个我就不念出来了，记下了~"]
+  ],
+  "starOn": [
+    ["happy", "《{name}》加星了！排到最前面啦~"],
+    ["tease", "这本这么喜欢？都加星了~"],
+    ["ok", "星星给《{name}》，记住了！"]
+  ],
+  "starOff": [
+    ["surprised", "诶，不喜欢《{name}》了吗？"],
+    ["ok", "星星收回来啦。"]
+  ],
+  "feedNew": [
+    ["surprised", "你收藏的 {author} 出新本了！《{name}》"],
+    ["happy", "{author} 更新啦！要不要去看看？"],
+    ["tease", "{author} 出新本了……今晚有得看了吧~"]
+  ],
+  "feedNewMany": [
+    ["happy", "收藏的作者一共出了 {n} 本新本！"],
+    ["surprised", "哇，{n} 本新本！快去「动态」看看~"]
+  ],
   "shelf": {
     "tag": [
       ["tease", "让我看看……看来你对「{tag}」很感兴趣呢~"],
@@ -269,6 +311,18 @@
       ["think", "{author} 出新本了吗？要不要去搜搜看？"],
       ["peek", "{author} 的本子……你是不是翻得最勤的那个？"],
       ["giggle", "{n} 本 {author}！你是 {author} 的头号粉丝吧~"]
+    ],
+    "favTag": [
+      ["tease", "你收藏的「{tag}」……是心头好吧？我都记着呢。"],
+      ["peek", "说到「{tag}」，你收藏它的时候是不是偷偷笑了？"],
+      ["think", "要不要去搜搜新的「{tag}」？"],
+      ["giggle", "「{tag}」都被你收藏了，嘿嘿，口味暴露了哦~"]
+    ],
+    "favAuthor": [
+      ["tease", "{author} 是你的本命吧？都收藏了~"],
+      ["think", "{author} 最近有新本吗？去「动态」看看~"],
+      ["peek", "收藏的作者里，你最常翻的是 {author} 吧？"],
+      ["giggle", "{author} 的画风……你果然喜欢这种~"]
     ]
   }
 }
