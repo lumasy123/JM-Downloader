@@ -63,7 +63,7 @@ def sync() -> str:
     web_dst.mkdir(parents=True)
 
     digest = hashlib.md5()
-    for name in ("app.js", "style.css", "pet.js", "mask.js"):
+    for name in ("app.js", "lists.js", "feed.js", "io.js", "style.css", "pet.js", "mask.js"):
         digest.update((web_src / name).read_bytes())
     version = digest.hexdigest()[:8]
 

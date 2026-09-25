@@ -92,6 +92,10 @@ FAVORITES_PATH = DOWNLOAD_DIR.parent / "favorites.json"
 # 书架上每本的小笔记
 NOTES_PATH = DOWNLOAD_DIR.parent / "notes.json"
 
+# 评分：自定义的几条标准（画面、剧情……），每本按每条打 1~5 分，平均分用来排序、筛选
+RATINGS_PATH = DOWNLOAD_DIR.parent / "ratings.json"
+DEFAULT_CRITERIA = ["画面", "剧情", "实用性"]
+
 # 「动态」页：收藏作者的新本、和收藏标签最搭的新本的缓存，以及已经提醒过的新本
 FEED_PATH = DOWNLOAD_DIR.parent / "feed.json"
 
@@ -358,6 +362,35 @@ def save_notes(data: dict) -> None:
     NOTES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
 
 
+_RATINGS_LOCK = threading.Lock()
+
+
+def load_ratings() -> dict:
+    """{"criteria": [标准...], "scores": {漫画id: {标准: 1~5}}}"""
+    if RATINGS_PATH.exists():
+        try:
+            data = json.loads(RATINGS_PATH.read_text("utf-8"))
+            criteria = [str(c).strip()[:12] for c in data.get("criteria", []) if str(c).strip()]
+            scores = {
+                str(k): {str(c): int(n) for c, n in v.items() if 1 <= int(n) <= 5}
+                for k, v in (data.get("scores") or {}).items() if str(k).isdigit() and isinstance(v, dict)
+            }
+            return {"criteria": criteria, "scores": scores}
+        except Exception:
+            pass
+    return {"criteria": list(DEFAULT_CRITERIA), "scores": {}}
+
+
+def save_ratings(data: dict) -> None:
+    RATINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+def rating_of(scores: dict, criteria: list[str]) -> float | None:
+    """按现在的几条标准取平均；删掉的标准打过的分留着，但不算进平均。一条都没打就是 None。"""
+    vals = [scores[c] for c in criteria if c in scores]
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
 def author_keys(author) -> set[str]:
     """作者字段里可能写着好几个人（「甲、乙」「甲 & 乙」），拆开来一个个比对。"""
     text = str(author or "")
@@ -506,7 +539,7 @@ def album_summary(album_dir: Path) -> dict | None:
 
 def build_shelf() -> list[dict]:
     assign = load_groups()["assign"]
-    starred = set(load_favorites()["books"])
+    ratings = load_ratings()
     notes = load_notes()
     items = []
     for d in DOWNLOAD_DIR.iterdir():
@@ -514,7 +547,8 @@ def build_shelf() -> list[dict]:
             item = album_summary(d)
             if item:
                 item["group"] = assign.get(item["id"], "")
-                item["starred"] = item["id"] in starred
+                item["scores"] = ratings["scores"].get(item["id"], {})
+                item["rating"] = rating_of(item["scores"], ratings["criteria"])
                 item["note"] = notes.get(item["id"], "")
                 items.append(item)
     items.sort(key=lambda x: x["added_at"], reverse=True)
@@ -801,20 +835,61 @@ def fetch_cover(album_id: str) -> Path | None:
     return path if path.exists() and path.stat().st_size > 0 else None
 
 
-_INFO_CACHE: dict[str, dict] = {}
+# 单本详情（标签、作者、章节数）的缓存。存到磁盘上：安卓版每次打开 App 都会重启内置服务，
+# 只放内存的话，拉黑过滤、收藏排序、动态页每次都得从头逐本查标签
+INFO_CACHE_PATH = DOWNLOAD_DIR.parent / "info_cache.json"
+INFO_TTL = 30 * 86400      # 标签很少改，一个月内不重查
+INFO_MAX = 8000            # 最多记这么多本，多了扔掉最早查的
 _INFO_LOCK = threading.Lock()
+_INFO_SAVE_TIMER: threading.Timer | None = None
 
 
-def album_info(album_id: str) -> dict:
-    """单本的标签等信息。
+def _load_info_cache() -> dict[str, dict]:
+    try:
+        data = json.loads(INFO_CACHE_PATH.read_text("utf-8"))
+        now = time.time()
+        return {k: v for k, v in data.items() if now - v.get("_t", 0) < INFO_TTL}
+    except Exception:
+        return {}
+
+
+_INFO_CACHE: dict[str, dict] = _load_info_cache()
+
+
+def _save_info_cache() -> None:
+    global _INFO_SAVE_TIMER
+    with _INFO_LOCK:
+        _INFO_SAVE_TIMER = None
+        items = sorted(_INFO_CACHE.items(), key=lambda kv: kv[1].get("_t", 0))[-INFO_MAX:]
+        _INFO_CACHE.clear()
+        _INFO_CACHE.update(items)
+        text = json.dumps(_INFO_CACHE, ensure_ascii=False)
+    tmp = INFO_CACHE_PATH.with_name(INFO_CACHE_PATH.name + ".tmp")
+    tmp.write_text(text, "utf-8")
+    os.replace(tmp, INFO_CACHE_PATH)
+
+
+def _save_info_cache_later() -> None:
+    """攒几秒再一起写盘，一页几十本查完只写一次。调用时要持有 _INFO_LOCK。"""
+    global _INFO_SAVE_TIMER
+    if _INFO_SAVE_TIMER is None:
+        _INFO_SAVE_TIMER = threading.Timer(5, _save_info_cache)
+        _INFO_SAVE_TIMER.daemon = True
+        _INFO_SAVE_TIMER.start()
+
+
+def album_info(album_id: str, fresh: bool = False) -> dict:
+    """单本的标签、作者、章节数。
 
     搜索接口不返回标签，得逐本查详情。按标签搜一页能有八十条，
     一次性全查会让搜索卡好几秒，所以改成前端按需来问、这里加缓存。
+    fresh=True 时跳过缓存重查（追连载更新要看最新的章节数）。
     """
-    with _INFO_LOCK:
-        hit = _INFO_CACHE.get(album_id)
-    if hit is not None:
-        return hit
+    if not fresh:
+        with _INFO_LOCK:
+            hit = _INFO_CACHE.get(album_id)
+        if hit is not None:
+            return hit
 
     try:
         album = OPTION.new_jm_client().get_album_detail(album_id)
@@ -824,13 +899,22 @@ def album_info(album_id: str) -> dict:
             "author": str(getattr(album, "author", "")),
             # 不截断：标签拉黑要拿全部标签来比对，界面显示时再截
             "tags": [str(t) for t in (getattr(album, "tags", None) or [])],
+            "episodes": max(1, len(getattr(album, "episode_list", None) or [])),
+            "_t": time.time(),
         }
     except Exception as e:
         return {"id": album_id, "error": str(e), "tags": []}
 
     with _INFO_LOCK:
         _INFO_CACHE[album_id] = info
+        _save_info_cache_later()
     return info
+
+
+def album_infos(ids: list[str]) -> dict[str, dict]:
+    """一批本子的详情，并发查（有缓存的直接给）。"""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(zip(ids, pool.map(album_info, ids)))
 
 
 def _parse_results(result) -> list[dict]:
@@ -1028,74 +1112,218 @@ def _latest(method, query: str) -> list[dict]:
         return []
 
 
-def build_feed(with_tags: bool, force: bool = False) -> dict:
-    fav = load_favorites()
-    sig = json.dumps([fav["authors"][:FEED_MAX_AUTHORS], fav["tags"][:FEED_MAX_TAGS], with_tags],
-                     ensure_ascii=False)
-    with _FEED_LOCK:
-        cache = load_feed()
-        seen = cache.get("seen", [])
-        fresh = time.time() - cache.get("built_at", 0) < FEED_TTL and cache.get("sig") == sig
-        if fresh and not force:
-            return dict(cache, new=[x["id"] for x in cache.get("authors", []) if x["id"] not in seen])
+FEED_CHECK_BATCH = 25      # 追连载：每次最多查这么多本书架上的书
+FEED_CHECK_EVERY = 86400   # 一本书一天最多查一次章节数
 
-    client = OPTION.new_jm_client()
+
+def _feed_keep(fav=None):
+    """动态里要去掉的：拉黑的、点过「不感兴趣」的、一个月以前的。"""
     since = time.time() - FEED_DAYS * 86400
     blocked = blocked_ids()
     bad_tags = blocked_tags()
     bad_authors = blocked_authors()
-    fav_tags = {norm_tag(t) for t in fav["tags"]}
+    dismissed = set(load_feed().get("dismissed", []))
 
     def keep(it: dict) -> bool:
-        if it["id"] in blocked or author_keys(it.get("author")) & bad_authors:
+        if it["id"] in blocked or it["id"] in dismissed or author_keys(it.get("author")) & bad_authors:
             return False
         if it.get("tags_checked") and any(norm_tag(t) in bad_tags for t in it["tags"]):
             return False
         # 没有时间的（接口偶尔不给）也留着，交给禁漫的「一个月内」筛选
-        return not it["updated"] or it["updated"] >= since
+        return not it.get("updated") or it["updated"] >= since
+    return keep
 
-    # 收藏作者：各查一次，合并去重，按更新时间从新到旧
+
+def _feed_authors(fav: dict) -> list[dict]:
+    """收藏作者一个月内的新本，按更新时间从新到旧。"""
+    client = OPTION.new_jm_client()
     with ThreadPoolExecutor(max_workers=4) as pool:
         pages = list(pool.map(lambda a: _latest(client.search_author, a), fav["authors"][:FEED_MAX_AUTHORS]))
     by_id: dict[str, dict] = {}
     for items in pages:
         for it in items:
             by_id.setdefault(it["id"], it)
-    authors = list(by_id.values())
-    if bad_tags:
-        _fill_tags(authors)
-    authors = sorted([it for it in authors if keep(it)], key=lambda it: -it["updated"])
+    items = list(by_id.values())
+    if blocked_tags():
+        _fill_tags(items)
+    keep = _feed_keep()
+    return sorted([it for it in items if keep(it)], key=lambda it: -it["updated"])
 
-    # 收藏标签：各查一次，取最新的一批算和收藏标签的重合个数
-    tags: list[dict] = []
-    if with_tags and fav_tags:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            pages = list(pool.map(lambda t: _latest(client.search_tag, t), fav["tags"][:FEED_MAX_TAGS]))
-        cand: dict[str, dict] = {}
-        for items in pages:
-            for it in items:
-                if it["id"] not in by_id:
-                    cand.setdefault(it["id"], it)
-        pool_items = sorted(cand.values(), key=lambda it: -it["updated"])[:FEED_TAG_CANDIDATES]
-        _fill_tags(pool_items)
-        for it in pool_items:
-            it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
-        tags = sorted([it for it in pool_items if it["fav_tags"] and keep(it)],
-                      key=lambda it: (-len(it["fav_tags"]), -it["updated"]))
 
-    data = {"built_at": time.time(), "sig": sig, "authors": authors, "tags": tags, "seen": seen}
+def _feed_tags(fav: dict, exclude: set[str]) -> list[dict]:
+    """收藏标签一个月内的新本，按和收藏标签的重合个数排。"""
+    fav_tags = {norm_tag(t) for t in fav["tags"]}
+    if not fav_tags:
+        return []
+    client = OPTION.new_jm_client()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = list(pool.map(lambda t: _latest(client.search_tag, t), fav["tags"][:FEED_MAX_TAGS]))
+    cand: dict[str, dict] = {}
+    for items in pages:
+        for it in items:
+            if it["id"] not in exclude:
+                cand.setdefault(it["id"], it)
+    pool_items = sorted(cand.values(), key=lambda it: -it["updated"])[:FEED_TAG_CANDIDATES]
+    _fill_tags(pool_items)
+    for it in pool_items:
+        it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
+    keep = _feed_keep()
+    return sorted([it for it in pool_items if it["fav_tags"] and keep(it)],
+                  key=lambda it: (-len(it["fav_tags"]), -it["updated"]))
+
+
+def _feed_updates() -> list[dict]:
+    """书架上的连载出了新章节：禁漫上的章节数比本地多的。每次轮着查一批，一本一天最多查一次。"""
+    shelf = {b["id"]: b for b in build_shelf()}
     with _FEED_LOCK:
-        data["seen"] = load_feed().get("seen", seen)
-        save_feed(data)
-    return dict(data, new=[x["id"] for x in authors if x["id"] not in data["seen"]])
+        chk = load_feed().get("chk", {})
+    now = time.time()
+    due = sorted((i for i in shelf if now - chk.get(i, {}).get("t", 0) > FEED_CHECK_EVERY),
+                 key=lambda i: chk.get(i, {}).get("t", 0))[:FEED_CHECK_BATCH]
+    if due:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            infos = list(pool.map(lambda i: album_info(i, fresh=True), due))
+        for i, info in zip(due, infos):
+            if not info.get("error"):
+                chk[i] = {"t": now, "remote": int(info.get("episodes") or 1)}
+        with _FEED_LOCK:
+            data = load_feed()
+            data["chk"] = {k: v for k, v in {**data.get("chk", {}), **chk}.items() if k in shelf}
+            save_feed(data)
+    out = []
+    for i, b in shelf.items():
+        remote = chk.get(i, {}).get("remote", 0)
+        if remote > b["chapters"]:
+            out.append({"id": i, "name": b["name"], "author": b["author"], "tags": b["tags"],
+                        "tags_checked": True, "cover": f"/cover/{i}", "category": "",
+                        "local": b["chapters"], "remote": remote,
+                        "updated": int(chk[i]["t"]), "key": f"u:{i}:{remote}"})
+    return sorted(out, key=lambda it: -it["updated"])
+
+
+FEED_PARTS = ("updates", "authors", "tags")
+
+
+def build_feed_part(part: str, force: bool = False) -> dict:
+    """动态页的一块：updates 书架连载更新 / authors 收藏作者新本 / tags 和收藏标签最搭的新本。
+
+    各块分开缓存、分开请求：前端先拿到快的那块就先显示，不用等最慢的标签那块。
+    """
+    fav = load_favorites()
+    sig = json.dumps([part, fav["authors"][:FEED_MAX_AUTHORS], fav["tags"][:FEED_MAX_TAGS]],
+                     ensure_ascii=False) if part != "updates" else "updates"
+    with _FEED_LOCK:
+        cache = load_feed()
+        cached = cache.get("parts", {}).get(part)
+        seen = set(cache.get("seen", []))
+    fresh = cached and time.time() - cached.get("built_at", 0) < FEED_TTL and cached.get("sig") == sig
+    if not fresh or force:
+        if part == "authors":
+            items = _feed_authors(fav)
+        elif part == "tags":
+            with _FEED_LOCK:
+                exclude = {x["id"] for x in load_feed().get("parts", {}).get("authors", {}).get("items", [])}
+            items = _feed_tags(fav, exclude)
+        else:
+            items = _feed_updates()
+        cached = {"built_at": time.time(), "sig": sig, "items": items}
+        with _FEED_LOCK:
+            data = load_feed()
+            data.setdefault("parts", {})[part] = cached
+            save_feed(data)
+    # 缓存里的也按现在的黑名单、「不感兴趣」再筛一遍（拉黑是随时发生的）
+    keep = _feed_keep()
+    items = [it for it in cached["items"] if part == "updates" or keep(it)]
+    new = [] if part == "tags" else [it.get("key", it["id"]) for it in items
+                                     if it.get("key", it["id"]) not in seen]
+    return {"part": part, "built_at": cached["built_at"], "items": items, "new": new}
+
+
+def warm_feed() -> None:
+    """服务刚启动时在后台先把动态算好：打开「动态」页就不用等。"""
+    time.sleep(10)
+    for part in ("updates", "authors"):
+        try:
+            if part == "authors" and not load_favorites()["authors"]:
+                continue
+            build_feed_part(part)
+        except Exception:
+            pass
+
+
+EXPLORE_SIZE = 15
+EXPLORE_TAGS_PER_ROUND = 4     # 每次随机挑这么多个收藏标签去搜，请求别太多
+EXPLORE_CANDIDATES = 40        # 最多查这么多本的标签来算和收藏标签的重合
+
+
+def explore(exclude: set[str]) -> dict:
+    """探索：从收藏标签里随机挑几个、随机换排序和页码去搜，
+    按和收藏标签重合的个数排，挑 15 本还没下载过的。exclude 是这一轮已经给过的，换一批时不重复。"""
+    import random
+    fav = load_favorites()
+    fav_tags = {norm_tag(t) for t in fav["tags"]}
+    if not fav_tags:
+        return {"items": [], "error": "还没有收藏标签"}
+    c = jmcomic.JmMagicConstants
+    orders = [c.ORDER_BY_LATEST, c.ORDER_BY_VIEW, c.ORDER_BY_LIKE, c.ORDER_BY_SCORE]
+    client = OPTION.new_jm_client()
+    picked = random.sample(fav["tags"], min(EXPLORE_TAGS_PER_ROUND, len(fav["tags"])))
+
+    def one(tag: str) -> list[dict]:
+        try:
+            res = client.search_tag(search_query=tag, page=random.randint(1, 3),
+                                    order_by=random.choice(orders), time=c.TIME_ALL)
+            items = _parse_results(res)
+            if not items:   # 冷门标签翻到后面就空了，退回第一页
+                items = _parse_results(client.search_tag(search_query=tag, page=1,
+                                                         order_by=random.choice(orders), time=c.TIME_ALL))
+            return items
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = list(pool.map(one, picked))
+    blocked = blocked_ids()
+    bad_authors = blocked_authors()
+    cand: dict[str, dict] = {}
+    for items in pages:
+        for it in items:
+            i = it["id"]
+            if (i in exclude or i in blocked or (DOWNLOAD_DIR / i).is_dir()
+                    or author_keys(it.get("author")) & bad_authors):
+                continue
+            cand.setdefault(i, it)
+    pool_items = random.sample(list(cand.values()), min(EXPLORE_CANDIDATES, len(cand)))
+    _fill_tags(pool_items)
+    bad_tags = blocked_tags()
+    scored = []
+    for it in pool_items:
+        if any(norm_tag(t) in bad_tags for t in it["tags"]):
+            continue
+        it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
+        if it["fav_tags"]:
+            scored.append((len(it["fav_tags"]), random.random(), it))
+    scored.sort(key=lambda x: (-x[0], x[1]))   # 命中多的在前，一样多的随机
+    return {"items": [it for _, _, it in scored[:EXPLORE_SIZE]], "tags": picked}
 
 
 def mark_feed_seen(ids: list[str]) -> None:
     with _FEED_LOCK:
         data = load_feed()
         seen = data.get("seen", [])
-        seen = [*seen, *[i for i in ids if i not in seen]][-2000:]   # 只记最近这些，文件别越长越大
+        seen = [*seen, *[i for i in ids if i not in seen]][-3000:]   # 只记最近这些，文件别越长越大
         data["seen"] = seen
+        save_feed(data)
+
+
+def dismiss_feed(album_id: str) -> None:
+    """「不感兴趣」：这本以后不在动态里出现。"""
+    with _FEED_LOCK:
+        data = load_feed()
+        dismissed = data.get("dismissed", [])
+        if album_id not in dismissed:
+            dismissed.append(album_id)
+        data["dismissed"] = dismissed[-3000:]
         save_feed(data)
 
 
@@ -1219,6 +1447,155 @@ def clear_cache() -> int:
     return freed
 
 
+# --------------------------------------------------------------------------
+# 单本的后台活：压缩画质、导出 ZIP / PDF。都可能要几十秒，放后台跑，前端轮询进度
+# --------------------------------------------------------------------------
+COMPRESS_WIDTH = 1200      # 压缩后最宽这么多像素（手机屏幕看足够了）
+COMPRESS_QUALITY = 70
+PDF_MAX_SIDE = 1500
+JOBS: dict[tuple[str, str], dict] = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _album_images(album_dir: Path) -> list[Path]:
+    return [f for ch in chapter_dirs(album_dir) for f in page_files(ch)]
+
+
+def _open_scaled(path: Path, width: int):
+    """按宽度缩小后打开一张图。安卓的 Pillow 解不了 WebP，交给系统解码器。"""
+    from PIL import Image
+    try:
+        import android_webp
+        if path.suffix.lower() == ".webp" and android_webp.small_image:
+            return android_webp.small_image(str(path), width).convert("RGB")
+    except ImportError:
+        pass
+    im = Image.open(path).convert("RGB")
+    if im.width > width:
+        im = im.resize((width, round(im.height * width / im.width)), Image.LANCZOS)
+    return im
+
+
+def _save_small(im, path: Path) -> None:
+    if path.suffix.lower() == ".webp":
+        try:
+            import android_webp
+            if android_webp.encode_webp:
+                return android_webp.encode_webp(im, str(path), COMPRESS_QUALITY)
+        except ImportError:
+            pass
+        return im.save(path, "WEBP", quality=COMPRESS_QUALITY, method=4)
+    return im.save(path, "JPEG", quality=COMPRESS_QUALITY)
+
+
+def _job_compress(album_dir: Path, job: dict) -> None:
+    files = _album_images(album_dir)
+    job["total"] = len(files)
+    for f in files:
+        before = f.stat().st_size
+        tmp = f.with_name(f.stem + ".small" + f.suffix)
+        try:
+            _save_small(_open_scaled(f, COMPRESS_WIDTH), tmp)
+            # 只有真的变小了才换，已经压过的、本来就小的原样留着
+            if tmp.exists() and 0 < tmp.stat().st_size < before:
+                job["freed"] += before - tmp.stat().st_size
+                os.replace(tmp, f)
+        finally:
+            tmp.unlink(missing_ok=True)
+        job["done"] += 1
+
+
+def _write_pdf(files: list[Path], out: Path, job: dict) -> None:
+    """一页一页写 PDF：每页一张 JPEG，写完就扔，长本也不会把内存撑爆。"""
+    import io
+    offsets: list[int] = []
+    page_ids: list[int] = []
+    with open(out, "wb") as fp:
+        def obj(n: int, body: bytes) -> None:
+            offsets.append(fp.tell())
+            fp.write(f"{n} 0 obj\n".encode() + body + b"\nendobj\n")
+
+        fp.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+        n = 3                                   # 1 是目录，2 是页面树，放到最后写
+        for f in files:
+            im = _open_scaled(f, PDF_MAX_SIDE)
+            if im.height > PDF_MAX_SIDE * 3:    # 超长条再按高度压一下
+                im = im.resize((round(im.width * PDF_MAX_SIDE * 3 / im.height), PDF_MAX_SIDE * 3))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=80)
+            data = buf.getvalue()
+            w, h = im.size
+            img_n, content_n, page_n = n, n + 1, n + 2
+            obj(img_n, f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB "
+                       f"/BitsPerComponent 8 /Filter /DCTDecode /Length {len(data)} >>\nstream\n".encode()
+                + data + b"\nendstream")
+            draw = f"q {w} 0 0 {h} 0 0 cm /Im0 Do Q".encode()
+            obj(content_n, f"<< /Length {len(draw)} >>\nstream\n".encode() + draw + b"\nendstream")
+            obj(page_n, f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] "
+                        f"/Resources << /XObject << /Im0 {img_n} 0 R >> >> /Contents {content_n} 0 R >>".encode())
+            page_ids.append(page_n)
+            n += 3
+            job["done"] += 1
+        kids = " ".join(f"{i} 0 R" for i in page_ids)
+        obj(2, f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode())
+        obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+        # 交叉引用表按对象编号排
+        order = sorted(zip([*range(3, n), 2, 1], offsets))
+        xref = fp.tell()
+        fp.write(f"xref\n0 {n}\n0000000000 65535 f \n".encode())
+        for _, off in order:
+            fp.write(f"{off:010d} 00000 n \n".encode())
+        fp.write(f"trailer\n<< /Size {n} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+
+
+def _job_export(album_dir: Path, job: dict, fmt: str) -> None:
+    import zipfile
+    files = _album_images(album_dir)
+    job["total"] = len(files)
+    meta = read_meta(album_dir)
+    safe = re.sub(r'[\\/:*?"<>|\s]+', "_", str(meta.get("name") or ""))[:40].strip("_")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    out = BACKUP_DIR / f"JM{album_dir.name}{'_' + safe if safe else ''}.{fmt}"
+    tmp = out.with_name(out.name + ".part")
+    if fmt == "zip":
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:   # 图片本来就压过，不再压
+            for f in files:
+                z.write(f, f"{f.parent.name}/{f.name}")
+                job["done"] += 1
+    else:
+        _write_pdf(files, tmp, job)
+    os.replace(tmp, out)
+    job["path"] = str(out)
+    job["name"] = out.name
+
+
+def start_job(album_id: str, kind: str) -> dict:
+    album_dir = DOWNLOAD_DIR / album_id
+    if not album_dir.is_dir():
+        return {"error": "书架上没有这本"}
+    key = (album_id, kind)
+    with _JOBS_LOCK:
+        job = JOBS.get(key)
+        if job and job["state"] == "running":
+            return job
+        job = {"state": "running", "done": 0, "total": 0, "freed": 0}
+        JOBS[key] = job
+
+    def run():
+        try:
+            if kind == "compress":
+                _job_compress(album_dir, job)
+            else:
+                _job_export(album_dir, job, kind)
+            job["state"] = "done"
+        except Exception as e:
+            job["state"] = "error"
+            job["error"] = str(e)
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
 def _clean_numbers(raw) -> dict[str, int]:
     """把前端传来的 {漫画id: 数字} 清洗一遍，丢掉不合法的键值。"""
     out = {}
@@ -1247,16 +1624,23 @@ def export_backup(body: dict) -> dict:
         "blacklist_authors": load_blacklist()["authors"],
         "favorites": load_favorites(),
         "notes": load_notes(),
+        "ratings": load_ratings(),
         # 只存书目不存图片：换手机后可以照着这份清单重新下载
         "shelf": shelf,
         "progress": _clean_numbers(body.get("progress")),
         "read": _clean_numbers(body.get("read")),
+        "opens": _clean_numbers(body.get("opens")),
         "settings": body.get("settings") if isinstance(body.get("settings"), dict) else {},
     }
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    name = time.strftime("jmshelf-backup-%Y%m%d-%H%M%S.json")
+    auto = bool(body.get("auto"))
+    name = time.strftime(("jmshelf-auto-" if auto else "jmshelf-backup-") + "%Y%m%d-%H%M%S.json")
     path = BACKUP_DIR / name
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+    if auto:
+        # 自动备份只留最近 4 份
+        for old in sorted(BACKUP_DIR.glob("jmshelf-auto-*.json"))[:-4]:
+            old.unlink(missing_ok=True)
     return {"path": str(path), "name": name,
             "size": path.stat().st_size, "books": len(shelf)}
 
@@ -1273,7 +1657,7 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
     """导出号单：纯文本，按「[书架]」「[黑名单·标签]」这样分段。
 
     用纯文本是为了能直接贴进聊天软件、用记事本打开。书架、黑名单本子每行只写 JM 号
-    （标题导入时再查），加了星的在行首标 ★；标签、作者名单每行一个。
+    （标题导入时再查）；标签、作者名单每行一个。
     parts 选导出哪几块：shelf / black / fav。
     """
     parts = set(parts or ["shelf"])
@@ -1289,7 +1673,7 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
             keep = set(ids)
             books = [b for b in books if b["id"] in keep]
         count = len(books)
-        sections.append(("shelf", [("★" if b.get("starred") else "") + f"JM{b['id']}" for b in books]))
+        sections.append(("shelf", [f"JM{b['id']}" for b in books]))
     if "black" in parts:
         bl = load_blacklist()
         sections += [
@@ -1308,7 +1692,7 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
 
     lines = [
         f"# JM下载器 号单 · {time.strftime('%Y-%m-%d %H:%M')}",
-        "# 每行一个：JM 号前面有 ★ 的是加了星；标签、作者名单每行一个。导入时按 [分段] 认",
+        "# 书、标签、作者每行一个。导入时按 [分段] 认",
     ]
     for key, rows in sections:
         lines += ["", f"[{LIST_SECTIONS[key]}]", *rows]
@@ -1379,6 +1763,16 @@ def import_backup(data: dict) -> dict:
                 fav["books"].append(x)
         save_favorites(fav)
 
+    ratings_in = data.get("ratings") if isinstance(data.get("ratings"), dict) else {}
+    with _RATINGS_LOCK:
+        ratings = load_ratings()
+        ratings["criteria"] = _clean_names([*ratings["criteria"], *(ratings_in.get("criteria") or [])])[:8]
+        for k, v in (ratings_in.get("scores") or {}).items():
+            k = re.sub(r"\D", "", str(k))
+            if k and isinstance(v, dict) and k not in ratings["scores"]:   # 本机已打过分的不覆盖
+                ratings["scores"][k] = {str(c): int(n) for c, n in v.items() if str(n).isdigit() and 1 <= int(n) <= 5}
+        save_ratings(ratings)
+
     notes_in = data.get("notes") if isinstance(data.get("notes"), dict) else {}
     with _NOTES_LOCK:
         notes = load_notes()
@@ -1403,6 +1797,7 @@ def import_backup(data: dict) -> dict:
         "blacklist": added,
         "progress": _clean_numbers(data.get("progress")),
         "read": _clean_numbers(data.get("read")),
+        "opens": _clean_numbers(data.get("opens")),
         "settings": data.get("settings") if isinstance(data.get("settings"), dict) else {},
         "missing": missing,
     }
@@ -1470,6 +1865,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(WEB_DIR / "index.html")
 
         if (path in ("/manifest.json", "/sw.js", "/app.js", "/style.css", "/pet.js", "/mask.js", "/pet-lines.json",
+                     "/lists.js", "/feed.js", "/io.js",
                      "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png")
                 or re.fullmatch(r"/pet-[a-z-]+\.webp", path)):   # 看板娘的各张图
             # 界面文件很小，每次都重新取，改完刷新就生效，不会被旧缓存卡住
@@ -1492,16 +1888,32 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/favorites":
             return self.send_json(load_favorites())
 
+        if path == "/api/ratings":
+            return self.send_json(load_ratings())
+
+        if path == "/api/album/job":
+            key = (re.sub(r"\D", "", (query.get("id") or [""])[0]), (query.get("kind") or [""])[0])
+            with _JOBS_LOCK:
+                job = JOBS.get(key)
+            return self.send_json(job or {"state": "none"})
+
+        if path.startswith("/backups/"):
+            # 网页版下载导出的 ZIP / PDF / 号单。只给备份目录里的文件，不许跳出去
+            name = urllib.parse.unquote(path[len("/backups/"):])
+            target = (BACKUP_DIR / name).resolve()
+            if target.parent != BACKUP_DIR.resolve() or not target.is_file():
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_file(target)
+
         if path == "/api/feed":
-            with_tags = (query.get("tags") or ["1"])[0] == "1"
+            part = (query.get("part") or ["authors"])[0]
+            if part not in FEED_PARTS:
+                return self.send_json({"error": "参数不对"}, 400)
             force = (query.get("force") or ["0"])[0] == "1"
             try:
-                data = build_feed(with_tags, force)
+                return self.send_json(build_feed_part(part, force))
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
-            data.pop("seen", None)
-            data.pop("sig", None)
-            return self.send_json(data)
 
         if path == "/api/tasks":
             with TASKS_LOCK:
@@ -1525,6 +1937,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(search_albums(keyword, kind, page, show_blocked, mode, fav))
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
+
+        if path == "/api/info" and query.get("ids"):
+            # 一次查一批：搜索结果一页的卡片合在一起问，不用每张卡片各发一个请求
+            ids = [x for x in (query.get("ids") or [""])[0].split(",") if re.fullmatch(r"\d+", x)][:40]
+            return self.send_json({"items": album_infos(ids)})
 
         if path == "/api/info":
             album_id = (query.get("id") or [""])[0]
@@ -1701,8 +2118,30 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(data)
 
         if path == "/api/feed/seen":
-            ids = [re.sub(r"\D", "", str(x)) for x in self.body_json().get("ids") or []]
-            mark_feed_seen([x for x in ids if x])
+            keys = [str(x)[:40] for x in self.body_json().get("ids") or [] if re.fullmatch(r"[\w:]+", str(x))]
+            mark_feed_seen(keys)
+            return self.send_json({"ok": True})
+
+        if path == "/api/album/job":
+            # 单本的后台活：{id, kind: compress | zip | pdf}
+            body = self.body_json()
+            album_id = re.sub(r"\D", "", str(body.get("id", "")))
+            kind = body.get("kind")
+            if not album_id or kind not in ("compress", "zip", "pdf"):
+                return self.send_json({"error": "参数不对"}, 400)
+            return self.send_json(start_job(album_id, kind))
+
+        if path == "/api/explore":
+            ex = {re.sub(r"\D", "", str(x)) for x in self.body_json().get("exclude") or []}
+            try:
+                return self.send_json(explore(ex))
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 502)
+
+        if path == "/api/feed/dismiss":
+            album_id = re.sub(r"\D", "", str(self.body_json().get("id", "")))
+            if album_id:
+                dismiss_feed(album_id)
             return self.send_json({"ok": True})
 
         if path == "/api/names":
@@ -1714,19 +2153,41 @@ class Handler(BaseHTTPRequestHandler):
             change_names(which, kind, body.get("add"), body.get("remove"))
             return self.send_json({"blacklist": load_blacklist(), "favorites": load_favorites()})
 
-        if path == "/api/star":
-            body = self.body_json()   # 请求体只能读一次
+        if path == "/api/rating":
+            # 给一本书的某条标准打分：{id, criterion, score}，score 为 0 就是清掉这条
+            body = self.body_json()
             album_id = re.sub(r"\D", "", str(body.get("id", "")))
-            on = bool(body.get("on"))
+            criterion = str(body.get("criterion", "")).strip()[:12]
+            try:
+                score = int(body.get("score", 0))
+            except (TypeError, ValueError):
+                score = 0
             if not album_id or not (DOWNLOAD_DIR / album_id).is_dir():
-                return self.send_json({"error": "只能给已下载的本子加星"}, 400)
-            with _FAVORITES_LOCK:
-                fav = load_favorites()
-                fav["books"] = [x for x in fav["books"] if x != album_id]
-                if on:
-                    fav["books"].insert(0, album_id)
-                save_favorites(fav)
-            return self.send_json({"ok": True, "starred": on})
+                return self.send_json({"error": "只能给已下载的本子打分"}, 400)
+            with _RATINGS_LOCK:
+                ratings = load_ratings()
+                if criterion not in ratings["criteria"]:
+                    return self.send_json({"error": "没有这条评分标准"}, 400)
+                mine = ratings["scores"].setdefault(album_id, {})
+                if 1 <= score <= 5:
+                    mine[criterion] = score
+                else:
+                    mine.pop(criterion, None)
+                if not mine:
+                    ratings["scores"].pop(album_id, None)
+                save_ratings(ratings)
+            return self.send_json({"scores": mine, "rating": rating_of(mine, ratings["criteria"])})
+
+        if path == "/api/rating/criteria":
+            criteria = _clean_names(self.body_json().get("criteria"))[:8]
+            criteria = [c[:12] for c in criteria]
+            if not criteria:
+                return self.send_json({"error": "至少留一条评分标准"}, 400)
+            with _RATINGS_LOCK:
+                ratings = load_ratings()
+                ratings["criteria"] = criteria
+                save_ratings(ratings)
+            return self.send_json({"criteria": criteria})
 
         if path == "/api/note":
             body = self.body_json()
@@ -1809,11 +2270,10 @@ class Handler(BaseHTTPRequestHandler):
                 data = load_groups()
                 if data["assign"].pop(album_dir.name, None) is not None:
                     save_groups(data)
-            with _FAVORITES_LOCK:
-                fav = load_favorites()
-                if album_dir.name in fav["books"]:
-                    fav["books"].remove(album_dir.name)
-                    save_favorites(fav)
+            with _RATINGS_LOCK:
+                ratings = load_ratings()
+                if ratings["scores"].pop(album_dir.name, None) is not None:
+                    save_ratings(ratings)
             return self.send_json({"ok": True})
         self.send_json({"error": "not found"}, 404)
 
@@ -1875,12 +2335,14 @@ def start_for_android() -> None:
         print("安卓图片处理钩子安装失败:", e)
 
     threading.Thread(target=backfill_meta, daemon=True).start()
+    threading.Thread(target=warm_feed, daemon=True).start()   # 后台先把动态算好
     ThreadingHTTPServer(("127.0.0.1", int(CONFIG["port"])), Handler).serve_forever()
 
 
 def main() -> None:
     port = int(CONFIG["port"])
     threading.Thread(target=backfill_meta, daemon=True).start()
+    threading.Thread(target=warm_feed, daemon=True).start()   # 后台先把动态算好
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print("=" * 46)
     print("  JM下载器已启动")

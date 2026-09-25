@@ -39,12 +39,16 @@
       "favAdd": "收藏了一个作者 / 标签 {name}",
       "favAddMany": "一次收藏好几个 {n}",
       "favAddQuiet": "收藏了不方便念出名字的标签",
-      "starOn": "书架上加星 {name}",
-      "starOff": "去掉星标 {name}",
       "feedNew": "收藏的作者出了一本新本 {author} {name}，气泡带「去看看」",
       "feedNewMany": "收藏的作者出了好几本新本 {n}，气泡带「去看看」",
       "shelf.favTag": "看漫画 / 点她时聊收藏的标签 {tag}（只说中性标签）",
-      "shelf.favAuthor": "看漫画 / 点她时聊收藏的作者 {author}"
+      "shelf.favAuthor": "看漫画 / 点她时聊收藏的作者 {author}",
+      "rateHigh": "打分后综合 4.5 分以上 {name} {score}",
+      "rateMid": "打分后综合 2~4.5 分",
+      "rateLow": "打分后综合 2 分以下",
+      "serialNew": "书架上一本连载出了新章节 {name} {n}=新几话，气泡带「去看看」",
+      "serialNewMany": "好几本连载更新了 {n}",
+      "shelf.opened": "看漫画 / 点她时调侃点开次数多的书 {name} {n}（点开 5 次以上才会说）"
   },
   "tap": [
     ["wave", "嗨~找我有事吗？"],
@@ -244,15 +248,6 @@
     ["ok", "记下了！以后帮你排前面~"],
     ["tease", "嗯哼……这个我就不念出来了，记下了~"]
   ],
-  "starOn": [
-    ["happy", "《{name}》加星了！排到最前面啦~"],
-    ["tease", "这本这么喜欢？都加星了~"],
-    ["ok", "星星给《{name}》，记住了！"]
-  ],
-  "starOff": [
-    ["surprised", "诶，不喜欢《{name}》了吗？"],
-    ["ok", "星星收回来啦。"]
-  ],
   "feedNew": [
     ["surprised", "你收藏的 {author} 出新本了！《{name}》"],
     ["happy", "{author} 更新啦！要不要去看看？"],
@@ -261,6 +256,27 @@
   "feedNewMany": [
     ["happy", "收藏的作者一共出了 {n} 本新本！"],
     ["surprised", "哇，{n} 本新本！快去「动态」看看~"]
+  ],
+  "rateHigh": [
+    ["happy", "《{name}》打了 {score} 分！这本是真爱吧~"],
+    ["tease", "{score} 分……看来这本让你很满意嘛，嘿嘿~"],
+    ["giggle", "这么高分，下次还要重温吧？"]
+  ],
+  "rateMid": [
+    ["ok", "《{name}》{score} 分，记下了。"],
+    ["think", "{score} 分啊……中规中矩？"]
+  ],
+  "rateLow": [
+    ["surprised", "才 {score} 分？这本踩雷了？"],
+    ["sad", "《{name}》不合口味吗……下次帮你避开类似的。"]
+  ],
+  "serialNew": [
+    ["surprised", "《{name}》更新了 {n} 话！要补下吗？"],
+    ["happy", "你书架上的《{name}》出新章节啦~"]
+  ],
+  "serialNewMany": [
+    ["happy", "书架上有 {n} 本连载更新了！"],
+    ["surprised", "{n} 本追的连载都更新了，快去「动态」看看~"]
   ],
   "shelf": {
     "tag": [
@@ -323,6 +339,15 @@
       ["think", "{author} 最近有新本吗？去「动态」看看~"],
       ["peek", "收藏的作者里，你最常翻的是 {author} 吧？"],
       ["giggle", "{author} 的画风……你果然喜欢这种~"]
+    ],
+    "opened": [
+      ["tease", "《{name}》你都点开 {n} 次了……这么好用吗？"],
+      ["peek", "又是《{name}》？这已经是第 {n} 次了哦，嘿嘿~"],
+      ["giggle", "《{name}》是你的「固定节目」吧？{n} 次了~"],
+      ["tease", "点开 {n} 次……《{name}》里你最喜欢哪一页？告诉我嘛~"],
+      ["think", "《{name}》翻了 {n} 遍，内容应该都背下来了吧？"],
+      ["peek", "每次安静下来你就去点《{name}》……我都发现啦。"],
+      ["tease", "《{name}》{n} 次……今晚是不是还要再来一次？"]
     ]
   }
 }

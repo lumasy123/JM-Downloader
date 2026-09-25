@@ -1,7 +1,7 @@
 // 只缓存界面外壳，漫画图片由本地服务器直接提供
 const CACHE = 'jm-shell-v1';
 // 要和 index.html 里的版本号一致
-const SHELL = ['/', '/style.css?v=4', '/app.js?v=4', '/pet.js?v=4', '/mask.js?v=4', '/pet-lines.json', '/icon-192.png', '/manifest.json'];
+const SHELL = ['/', '/style.css?v=4', '/lists.js?v=4', '/app.js?v=4', '/feed.js?v=4', '/io.js?v=4', '/pet.js?v=4', '/mask.js?v=4', '/pet-lines.json', '/icon-192.png', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

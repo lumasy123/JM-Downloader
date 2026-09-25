@@ -39,6 +39,8 @@
       <option value="read">最近阅读</option>
       <option value="name">标题</option>
       <option value="pages">页数</option>
+      <option value="rating">评分</option>
+      <option value="opens">点开最多</option>
     </select>
   </div>
   <div id="shelf-filters" class="chips scroll"></div>
@@ -73,6 +75,7 @@
       <button class="chip" data-mode="and">同时包含</button>
       <button class="chip" data-mode="or">包含其一</button>
     </div>
+    <button id="btn-explore" class="explore-btn" type="button">探索：按收藏标签挑 15 本没看过的</button>
     <label class="blk-toggle">
       <input type="checkbox" class="switch" id="show-blocked">
       <span>显示已拉黑的本子和标签</span>
@@ -108,9 +111,14 @@
     <button id="feed-refresh" class="icon-btn" aria-label="刷新" title="刷新"><span data-icon="refresh"></span></button>
   </header>
   <p id="feed-hint" class="hint center"></p>
-  <h2 class="section-title feed-title" id="feed-authors-title">收藏作者的新本 · 近 30 天</h2>
+  <h2 class="section-title feed-title hidden" id="feed-updates-title">书架上的连载有更新</h2>
+  <div id="feed-updates" class="cards"></div>
+  <div class="seg" id="feed-seg">
+    <button data-tab="authors">关注作者</button>
+    <button data-tab="tags">关注标签</button>
+  </div>
+  <p id="feed-tab-hint" class="hint center"></p>
   <div id="feed-authors" class="cards"></div>
-  <h2 class="section-title feed-title" id="feed-tags-title">和你收藏的标签最搭的新本</h2>
   <div id="feed-tags" class="cards"></div>
 </section>
 
@@ -146,6 +154,11 @@
     <button class="menu-item" id="mine-favauthors">
       <span class="label">收藏的作者</span>
       <span class="value" id="mine-favauthors-count"></span>
+      <span class="arrow">›</span>
+    </button>
+    <button class="menu-item" id="mine-stats">
+      <span class="label">阅读记录</span>
+      <span class="value">看了多少 · 最近看过</span>
       <span class="arrow">›</span>
     </button>
     <button class="menu-item" id="mine-storage">
@@ -233,10 +246,6 @@
         </select>
       </label>
       <label class="menu-item setting">
-        <span class="label">动态里显示「最搭的新本」<small>按收藏的标签找一个月内的新本，标签重合越多越靠前。收藏的标签多时刷新会慢一些</small></span>
-        <input type="checkbox" class="switch" data-pref="jm-feed-tags">
-      </label>
-      <label class="menu-item setting">
         <span class="label">收藏排序范围<small>搜索时收藏的标签、作者排前面。「前 5 页一起排」能把后面的收藏本子提上来，但每次新搜索要多等十几秒（要逐本查标签）</small></span>
         <select data-pref="jm-fav-sort">
           <option value="page">只排当前页</option>
@@ -273,6 +282,15 @@
       </label>
     </div>
 
+    <h2 class="section-title">评分</h2>
+    <div class="menu">
+      <button class="menu-item" id="set-criteria" type="button">
+        <span class="label">评分标准<small>每本书按这几条各打 1~5 分，书架按平均分排序、筛选</small></span>
+        <span class="value" id="criteria-value"></span>
+        <span class="arrow">›</span>
+      </button>
+    </div>
+
     <h2 class="section-title">外观</h2>
     <div class="menu">
       <label class="menu-item setting">
@@ -293,6 +311,14 @@
       <label class="menu-item setting">
         <span class="label">看板娘<small>长按她可以收起来，点底栏上的小鲸鱼叫回来</small></span>
         <input type="checkbox" class="switch" data-pref="jm-pet">
+      </label>
+      <label class="menu-item setting">
+        <span class="label">看板娘话量<small>没人操作时自言自语的多少；深夜（23 点到 7 点）会自动安静些</small></span>
+        <select data-pref="jm-pet-chat">
+          <option value="quiet">安静</option>
+          <option value="normal">正常</option>
+          <option value="chatty">话多</option>
+        </select>
       </label>
     </div>
     <h2 class="section-title">隐私</h2>
@@ -419,7 +445,10 @@
 
 <div id="toast"></div>
 
+<script src="/lists.js?v=4"></script>
 <script src="/app.js?v=4"></script>
+<script src="/feed.js?v=4"></script>
+<script src="/io.js?v=4"></script>
 <script src="/pet.js?v=4"></script>
 <script src="/mask.js?v=4"></script>
 </body>

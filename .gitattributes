@@ -1,0 +1,9 @@
+# 文本统一按 LF 存进仓库，检出时按系统习惯转换；免得每次提交都报 CRLF 警告
+* text=auto
+# Windows 批处理必须是 CRLF，不然双击运行会出错
+*.bat text eol=crlf
+# 二进制素材不要转换
+*.png binary
+*.webp binary
+*.jpg binary
+*.apk binary

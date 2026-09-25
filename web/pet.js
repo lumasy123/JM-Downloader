@@ -225,6 +225,15 @@
     return { tag: fresh(tags), author: fresh(authors) };
   }
 
+  // 点开次数最多的几本里挑一本（5 次以上才算「经常点开」）
+  function openedPick(books) {
+    if (typeof openCount !== 'function') return null;
+    const top = books.map((b) => [b, openCount(b.id)]).filter(([, n]) => n >= 5)
+      .sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const hit = pick(top);
+    return hit ? { name: short(hit[0].name), n: hit[1] } : null;
+  }
+
   function shelfComment() {
     const books = (typeof shelfItems !== 'undefined' && shelfItems) || [];
     if (!books.length) return null;
@@ -254,6 +263,8 @@
       if (fav.tag) add('favTag', { tag: fav.tag });
       if (fav.author) add('favAuthor', { author: fav.author });
     }
+    const top = openedPick(books);
+    if (top) add('opened', top);
     if (!ideas.length) return null;
     const choice = pick(ideas);
     // 真正说出口的才算提过
@@ -290,6 +301,8 @@
       if (fav.tag) S('favTag').forEach((line) => ideas.push([line, { tag: fav.tag }]));
       if (fav.author) S('favAuthor').forEach((line) => ideas.push([line, { author: fav.author }]));
     }
+    const top = openedPick(books);
+    if (top) S('opened').forEach((line) => ideas.push([line, top]));
     const choice = pick(ideas);
     if (!choice) return false;
     const said = Object.values(choice[1]);
@@ -310,6 +323,19 @@
     return true;
   }
 
+  /* ---------------- 话量：安静 / 正常 / 话多；深夜自动安静些（选了话多的除外） */
+  function chatLevel() {
+    const set = pref('jm-pet-chat') || 'normal';
+    const h = new Date().getHours();
+    if (set !== 'chatty' && (h >= 23 || h < 7)) return 'quiet';
+    return set;
+  }
+  const CHAT = {
+    quiet: { gap: 2.2, comment: 0.3, chatter: 0 },
+    normal: { gap: 1, comment: 0.6, chatter: 0.1 },
+    chatty: { gap: 0.6, comment: 0.85, chatter: 0.2 },
+  };
+
   /* ---------------- 发呆：一阵子没人操作就看漫画；看的时候不时评论 */
   let lastActive = Date.now();
   let idleTimer;
@@ -317,8 +343,9 @@
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       if (shown() && !document.hidden && !sticky && !tempPose) {
+        const lv = CHAT[chatLevel()];
         if (reading) {
-          if (Math.random() < 0.6) comment();
+          if (Math.random() < lv.comment) comment();
         } else if (Date.now() - lastActive > READ_AFTER) {
           startReading();
         } else {
@@ -327,11 +354,11 @@
             pet.classList.add('wiggle');
             setTimeout(() => pet.classList.remove('wiggle'), 1200);
           } else if (r < 0.45) act('hop', 500);
-          else if (r < 0.55) speak(pick(L('chatter')));
+          else if (r < 0.45 + lv.chatter) speak(pick(L('chatter')));
         }
       }
       scheduleIdle();
-    }, 9000 + Math.random() * 14000);
+    }, (9000 + Math.random() * 14000) * CHAT[chatLevel()].gap);
   }
 
   // 在 App 里任何地方有操作都算回来了，她就合上漫画
@@ -530,10 +557,14 @@
     return true;
   };
 
-  window.petStarred = function petStarred(on, book) {
-    if (!visible() || sticky) return false;
+  // 打分：按综合分给反应；连着点星星时别每下都说，隔几秒才说一次
+  let lastRateTalk = 0;
+  window.petRated = function petRated(rating, book) {
+    if (!visible() || sticky || rating == null || Date.now() - lastRateTalk < 3500) return false;
+    lastRateTalk = Date.now();
     active();
-    speak(pick(L(on ? 'starOn' : 'starOff')), { name: short((book && book.name) || '这本') });
+    const group = rating >= 4.5 ? 'rateHigh' : rating <= 2 ? 'rateLow' : 'rateMid';
+    speak(pick(L(group)), { name: short((book && book.name) || '这本'), score: rating.toFixed(1) });
     return true;
   };
 
@@ -542,8 +573,14 @@
     active();
     const go = { label: '去看看', run: () => switchView('feed') };
     act('happy', 1000);
-    if (items.length === 1) {
-      speak(pick(L('feedNew')), { author: items[0].author, name: short(items[0].name) }, 4200, go);
+    const ups = items.filter((x) => x.part === 'updates');
+    const works = items.filter((x) => x.part !== 'updates');
+    if (!works.length) {
+      // 只有书架连载出了新章节
+      if (ups.length === 1) speak(pick(L('serialNew')), { name: short(ups[0].name), n: ups[0].remote - ups[0].local }, 4200, go);
+      else speak(pick(L('serialNewMany')), { n: ups.length }, 4200, go);
+    } else if (works.length === 1 && !ups.length) {
+      speak(pick(L('feedNew')), { author: works[0].author, name: short(works[0].name) }, 4200, go);
     } else {
       speak(pick(L('feedNewMany')), { n: items.length }, 4200, go);
     }
