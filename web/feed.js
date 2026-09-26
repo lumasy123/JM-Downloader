@@ -59,6 +59,19 @@ const EXPLORE_MODES = {
 let exploreMode = 'tags';
 const exploreSeen = new Set();
 let explorePrefetch = null;   // { promise, done, mode }
+// 进下载页时在后台先挑好的第一批（按收藏标签），点「探索」时直接用；10 分钟内有效
+let exploreWarm = null;       // { promise, done, mode, at }
+const EXPLORE_WARM_TTL = 10 * 60 * 1000;
+
+function warmExplore() {
+  if (exploreWarm && Date.now() - exploreWarm.at < EXPLORE_WARM_TTL) return;
+  if (!favTags.length) return;
+  const job = { done: false, mode: 'tags', at: Date.now() };
+  job.promise = api.post('/api/explore', { exclude: [], mode: 'tags' })
+    .catch(() => ({ error: '网络错误' }))
+    .then((res) => { job.done = true; return res; });
+  exploreWarm = job;
+}
 
 function fetchExplore() {
   const job = { done: false, mode: exploreMode };
@@ -92,7 +105,12 @@ async function doExplore(more = false, mode = exploreMode) {
   }
   if (!more) { exploreSeen.clear(); explorePrefetch = null; }
 
-  let job = more && explorePrefetch && explorePrefetch.mode === exploreMode ? explorePrefetch : fetchExplore();
+  let job = more && explorePrefetch && explorePrefetch.mode === exploreMode ? explorePrefetch : null;
+  if (!more && exploreWarm && exploreWarm.mode === exploreMode && Date.now() - exploreWarm.at < EXPLORE_WARM_TTL) {
+    job = exploreWarm;   // 进下载页时已经在挑了
+    exploreWarm = null;
+  }
+  job = job || fetchExplore();
   explorePrefetch = null;
   const cfg = EXPLORE_MODES[exploreMode];
   if (!job.done) {

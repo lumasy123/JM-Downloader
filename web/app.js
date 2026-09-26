@@ -217,6 +217,7 @@ function switchView(name, push = true) {
   if (name === 'download') {
     if (!$('#search-results').children.length) renderHistory();
     showTip('download');
+    if (typeof warmExplore === 'function') warmExplore();   // 后台先挑好第一批探索
   }
   if (name === 'feed') openFeed();
   if (push) history.pushState({ view: name }, '');
@@ -858,6 +859,54 @@ function openGroupSheet(albumId, current) {
   $('#sheet').classList.remove('hidden');
 }
 
+/* ---- 按钮文字只占一行：放不下时收窄左右留白（字号不变），还放不下才省略 ----
+ * 只管纯文字按钮（可以带一个图标）；里面有好几段的按钮（菜单项、分享项）本来就是多行排版，不动 */
+const FIT_PAD = 6;
+const fitPending = new Set();
+let fitRaf = 0;
+function fitButton(b) {
+  if (!b.isConnected || [...b.children].some((c) => c.tagName.toLowerCase() !== 'svg')) return;
+  if (!b.textContent.trim()) return;
+  b.classList.add('fit1');
+  b.style.paddingLeft = b.style.paddingRight = '';
+  if (!b.clientWidth) return;   // 还没显示出来（别的页面、收起的弹层），等显示时再量
+  if (b.scrollWidth <= b.clientWidth) return;
+  // 放不下：把左右留白收窄
+  if (parseFloat(getComputedStyle(b).paddingLeft) > FIT_PAD) {
+    b.style.paddingLeft = b.style.paddingRight = FIT_PAD + 'px';
+  }
+}
+function queueFit(node) {
+  if (!node || node.nodeType !== 1) node = node && node.parentElement;
+  if (!node) return;
+  const own = node.closest('button');
+  if (own) fitPending.add(own);
+  node.querySelectorAll('button').forEach((b) => fitPending.add(b));
+  if (!fitRaf) {
+    fitRaf = requestAnimationFrame(() => {
+      fitRaf = 0;
+      const list = [...fitPending];
+      fitPending.clear();
+      list.forEach(fitButton);
+    });
+  }
+}
+new MutationObserver((muts) => {
+  for (const m of muts) {
+    if (m.type === 'attributes') queueFit(m.target);   // 页面、弹层显示出来
+    else if (m.type === 'characterData') queueFit(m.target);
+    else {
+      queueFit(m.target.closest ? m.target : m.target.parentElement);
+      m.addedNodes.forEach((n) => { if (n.nodeType === 1) queueFit(n); });
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true, characterData: true });
+// 页面切换、弹层打开是改 class，单独盯这几个容器
+const fitWatch = new MutationObserver((muts) => muts.forEach((m) => queueFit(m.target)));
+$$('.view, #sheet, #dialog, #drawer').forEach((el) =>
+  fitWatch.observe(el, { attributes: true, attributeFilter: ['class'] }));
+window.addEventListener('resize', () => queueFit(document.body));
+
 /* ------------------------------------------------------ 确认弹窗 */
 function confirmDialog({ title, message = '', ok = '确定', danger = false }) {
   return new Promise((resolve) => {
@@ -1068,10 +1117,10 @@ async function openDetail(id, push = true) {
       <button class="ghost icon-only" id="btn-group" title="移动到分组" aria-label="移动到分组">${svg('folder', 20)}</button>
       <button class="ghost icon-only" id="btn-delete" title="删除这本" aria-label="删除这本">${svg('trash', 20)}</button>
     </div>
-    <div id="chapter-list"></div>
-    <div class="bm-list hidden" id="bm-list"></div>
     <button class="rating-btn hidden" id="btn-rating"></button>
-    <p class="detail-notetext hidden" id="detail-note"></p>`;
+    <p class="detail-notetext hidden" id="detail-note"></p>
+    <div id="chapter-list"></div>
+    <div class="bm-list hidden" id="bm-list"></div>`;
 
   body.querySelector('.head img').src = data.thumb;
   body.querySelector('.hero-bg').src = data.thumb;
@@ -1133,7 +1182,12 @@ async function openDetail(id, push = true) {
   body.querySelector('.cnt').textContent +=
     group ? ` · 分组：${group}` : '';
 
-  $('#btn-read').textContent = saved ? `继续阅读 (第 ${saved + 1} 页)` : '开始阅读';
+  // 读过的：三角形播放图标 + 页码（不写「继续阅读」四个字，窄屏也放得下）
+  const readBtn = $('#btn-read');
+  readBtn.innerHTML = svg('play', 16);
+  readBtn.append(saved ? ` 第 ${saved + 1} 页` : ' 开始阅读');
+  readBtn.setAttribute('aria-label', saved ? `继续阅读，第 ${saved + 1} 页` : '开始阅读');
+  readBtn.title = readBtn.getAttribute('aria-label');
   $('#btn-read').onclick = () => openReader(data.id, saved || 0);
   $('#btn-group').onclick = () => openGroupSheet(data.id, group);
   $('#btn-space').onclick = () => openShareSheet(book || { id: data.id, name: data.name, author: data.author });

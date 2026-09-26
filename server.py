@@ -971,9 +971,14 @@ def album_info(album_id: str, fresh: bool = False) -> dict:
     return info
 
 
+# 同时向禁漫发的请求数。禁漫接口单次要 1 秒多（慢在对方），
+# 一页 15 本的标签开够并发一轮就能查完；8 个时要跑两轮，第一次搜索会多等 1 秒左右
+NET_WORKERS = 16
+
+
 def album_infos(ids: list[str]) -> dict[str, dict]:
     """一批本子的详情，并发查（有缓存的直接给）。"""
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
         return dict(zip(ids, pool.map(album_info, ids)))
 
 
@@ -1008,11 +1013,18 @@ _SEARCH_LOCK = threading.Lock()
 
 def _fill_tags(items: list[dict]) -> None:
     """并发查一批本子的标签（album_info 有缓存，查过的不会再请求）。"""
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
         for it, info in zip(items, pool.map(lambda x: album_info(x["id"]), items)):
             # 查不到的当作没有标签，免得一本查不到就卡住整页
             it["tags"] = list(info.get("tags") or [])
             it["tags_checked"] = True
+
+
+def _prefetch_search(*args) -> None:
+    try:
+        search_albums(*args)
+    except Exception:
+        pass
 
 
 def build_query(keyword: str, mode: str) -> str:
@@ -1199,7 +1211,7 @@ def _feed_keep(fav=None):
 def _feed_authors(fav: dict) -> list[dict]:
     """收藏作者一个月内的新本，按更新时间从新到旧。"""
     client = OPTION.new_jm_client()
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
         pages = list(pool.map(lambda a: _latest(client.search_author, a), fav["authors"][:FEED_MAX_AUTHORS]))
     by_id: dict[str, dict] = {}
     for items in pages:
@@ -1219,7 +1231,7 @@ def _feed_tags(fav: dict, exclude: set[str]) -> list[dict]:
     if not fav_tags:
         return []
     client = OPTION.new_jm_client()
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
         pages = list(pool.map(lambda t: _latest(client.search_tag, t), fav["tags"][:FEED_MAX_TAGS]))
     cand: dict[str, dict] = {}
     for items in pages:
@@ -1246,7 +1258,7 @@ def _feed_updates() -> list[dict]:
     due = sorted((i for i in shelf if now - chk.get(i, {}).get("t", 0) > FEED_CHECK_EVERY),
                  key=lambda i: chk.get(i, {}).get("t", 0))[:FEED_CHECK_BATCH]
     if due:
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
             infos = list(pool.map(lambda i: album_info(i, fresh=True), due))
         for i, info in zip(due, infos):
             if not info.get("error"):
@@ -1305,11 +1317,19 @@ def build_feed_part(part: str, force: bool = False) -> dict:
 
 
 def warm_feed() -> None:
-    """服务刚启动时在后台先把动态算好：打开「动态」页就不用等。"""
+    """服务刚启动时在后台预热：
+    - 马上建一次禁漫客户端（第一次要选域名，2 秒多），不然这 2 秒会算到第一次搜索头上；
+    - 过一会儿把动态算好，打开「动态」页就不用等。"""
+    try:
+        OPTION.new_jm_client()
+    except Exception:
+        pass
     time.sleep(10)
-    for part in ("updates", "authors"):
+    for part in ("updates", "authors", "tags"):
         try:
             if part == "authors" and not load_favorites()["authors"]:
+                continue
+            if part == "tags" and not load_favorites()["tags"]:
                 continue
             build_feed_part(part)
         except Exception:
@@ -1318,7 +1338,7 @@ def warm_feed() -> None:
 
 EXPLORE_SIZE = 15
 EXPLORE_TAGS_PER_ROUND = 4     # 每次随机挑这么多个收藏标签去搜，请求别太多
-EXPLORE_CANDIDATES = 40        # 最多查这么多本的标签来算和收藏标签的重合
+EXPLORE_CANDIDATES = 32        # 最多查这么多本的标签来算和收藏标签的重合（NET_WORKERS 的整数倍，两轮查完）
 
 
 EXPLORE_MODES = ("tags", "authors", "hot")
@@ -1381,7 +1401,7 @@ def _explore_sources(mode: str, fav: dict, client, rnd) -> tuple[list[str], list
                     return []
             return one
         jobs = [rank(client.week_ranking, page_w), rank(client.month_ranking, page_m)]
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
         pages = list(pool.map(lambda f: f(), jobs))
     return picked, pages
 
@@ -2092,7 +2112,12 @@ class Handler(BaseHTTPRequestHandler):
                 show_blocked = (query.get("show_blocked") or ["0"])[0] == "1"
                 mode = (query.get("mode") or ["and"])[0]
                 fav = (query.get("fav") or ["page"])[0]
-                return self.send_json(search_albums(keyword, kind, page, show_blocked, mode, fav))
+                result = search_albums(keyword, kind, page, show_blocked, mode, fav)
+                if result.get("has_more"):
+                    # 后台先把下一页（包括标签）准备好，点「下一页」基本不用等
+                    threading.Thread(target=_prefetch_search, daemon=True,
+                                     args=(keyword, kind, page + 1, show_blocked, mode, fav)).start()
+                return self.send_json(result)
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
 

@@ -2298,3 +2298,14 @@ body.masked .mw-all::after { transform: none; }
 /* 只有电脑版显示的设置（存储位置） */
 body:not(.desktop) .desktop-only { display: none; }
 #data-dir { word-break: break-all; }
+
+/* 按钮文字只占一行（字号由 app.js 的 fitButton 按宽度缩小） */
+button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 评分 · 笔记挪到章节上面后，和章节列表之间留点空 */
+#detail-body #chapter-list { margin-top: 12px; }
+
+/* 详情页的阅读按钮：播放图标 + 页码，留白收窄 */
+.detail .actions #btn-read { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; }
+.detail .actions #btn-read svg { flex: none; }
+.detail .actions #btn-read svg path { fill: currentColor; }
