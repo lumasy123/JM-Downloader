@@ -30,6 +30,8 @@ const ICONS = {
   selectAll: 'M3 12.5l3.5 3.5L14 8.5M10 16l1 1 9-9.5',
   share: 'M12 15V3M8 7l4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7',
   play: 'M8 5.5v13l10.5-6.5z',
+  // 圆圈里一个圆角三角：详情页的「继续阅读」按钮
+  playCircle: 'M12 2.8a9.2 9.2 0 1 0 0 18.4 9.2 9.2 0 1 0 0-18.4zM10.2 8.6v6.8l5.4-3.4z',
   next: 'M9 6l6 6-6 6',
   bell: 'M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
   box: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
@@ -1184,7 +1186,7 @@ async function openDetail(id, push = true) {
 
   // 读过的：三角形播放图标 + 页码（不写「继续阅读」四个字，窄屏也放得下）
   const readBtn = $('#btn-read');
-  readBtn.innerHTML = svg('play', 16);
+  readBtn.innerHTML = svg('playCircle', 18);
   readBtn.append(saved ? ` 第 ${saved + 1} 页` : ' 开始阅读');
   readBtn.setAttribute('aria-label', saved ? `继续阅读，第 ${saved + 1} 页` : '开始阅读');
   readBtn.title = readBtn.getAttribute('aria-label');

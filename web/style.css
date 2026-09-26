@@ -2308,4 +2308,3 @@ button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 详情页的阅读按钮：播放图标 + 页码，留白收窄 */
 .detail .actions #btn-read { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; }
 .detail .actions #btn-read svg { flex: none; }
-.detail .actions #btn-read svg path { fill: currentColor; }
