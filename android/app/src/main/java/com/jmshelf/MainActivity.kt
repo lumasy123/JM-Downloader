@@ -188,12 +188,16 @@ class MainActivity : Activity() {
                 ): Boolean {
                     fileCallback?.onReceiveValue(null)
                     fileCallback = callback
+                    // 网页里 accept="image/*" 的只列图片；其余（压缩包、PDF、备份）不限类型
+                    val images = params.acceptTypes.any { it.startsWith("image/") }
                     val pick = Intent(Intent.ACTION_GET_CONTENT)
                         .addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType("*/*")
+                        .setType(if (images) "image/*" else "*/*")
+                        .putExtra(Intent.EXTRA_ALLOW_MULTIPLE,
+                            params.mode == FileChooserParams.MODE_OPEN_MULTIPLE)
                     return try {
                         @Suppress("DEPRECATION")
-                        startActivityForResult(Intent.createChooser(pick, "选择备份文件"), REQ_FILE)
+                        startActivityForResult(Intent.createChooser(pick, "选择文件"), REQ_FILE)
                         true
                     } catch (_: Exception) {
                         fileCallback = null
@@ -373,8 +377,12 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQ_FILE) {
-            fileCallback?.onReceiveValue(
-                WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            // 多选时文件在 clipData 里，parseResult 只认单个
+            val clip = data?.clipData
+            val uris = if (resultCode == RESULT_OK && clip != null && clip.itemCount > 0)
+                Array(clip.itemCount) { clip.getItemAt(it).uri }
+            else WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            fileCallback?.onReceiveValue(uris)
             fileCallback = null
             return
         }

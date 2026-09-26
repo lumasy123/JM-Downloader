@@ -457,6 +457,9 @@ let activeTasks = new Map();   // 正在下 / 排队中的任务，书架据此�
 const lastRead = (id) => parseInt(localStorage.getItem('jm-read-' + id) || '0', 10);
 // 在这台设备上点开阅读的次数
 const openCount = (id) => parseInt(localStorage.getItem('jm-opens-' + id) || '0', 10);
+// 本地导入的书：ID 是 10 位、9 开头（禁漫号只有 7 位），界面上不显示成 JM 号
+const isLocalId = (id) => String(id).length === 10 && String(id)[0] === '9';
+const jmLabel = (id) => (isLocalId(id) ? '本地导入' : 'JM' + id);
 
 const SORTERS = {
   added: (a, b) => b.added_at - a.added_at,
@@ -580,7 +583,7 @@ function buildBookCard(book) {
       tagBox.appendChild(s);
     }
 
-    el.querySelector('.jmid').textContent = `JM${book.id} · ${book.pages}P`;
+    el.querySelector('.jmid').textContent = `${jmLabel(book.id)} · ${book.pages}P`;
     el.querySelector('.opens').textContent = `点开 ${openCount(book.id)} 次`;
     if (book.rating != null) {
       // 综合星级：各条标准打分的平均，精确到 0.1 颗星，后面跟具体分数
@@ -1171,11 +1174,18 @@ async function openDetail(id, push = true) {
       id: data.id, name: data.name, author: data.author, tags: data.tags || [],
     }, { noBook: true });
     tagBox.appendChild(fav);
-  } else {
-    tagBox.remove();
   }
+  if (data.local) {
+    // 本地导入的：自己改书名、作者、打标签
+    const edit = document.createElement('button');
+    edit.className = 'tag tag-fav-btn';
+    edit.innerHTML = svg('edit', 12) + '<span>编辑信息</span>';
+    edit.onclick = () => openMetaSheet(data);
+    tagBox.appendChild(edit);
+  }
+  if (!tagBox.children.length) tagBox.remove();
 
-  body.querySelector('.id').textContent = 'JM' + data.id;
+  body.querySelector('.id').textContent = jmLabel(data.id);
   const total = data.chapters.reduce((n, c) => n + c.pages.length, 0);
   body.querySelector('.cnt').textContent = `${data.chapters.length} 话 · ${total} 页`;
 
@@ -1251,6 +1261,46 @@ async function openDetail(id, push = true) {
   switchView('detail', false);
   if (push) history.pushState({ view: 'detail', album: id }, '');
   if (data.author) showTip('detail');
+}
+
+// 本地导入的书：改书名、作者、标签
+function openMetaSheet(data) {
+  $('#sheet-title').textContent = '编辑信息';
+  const body = $('#sheet-body');
+  body.innerHTML = '';
+  const field = (label, value, placeholder) => {
+    const h = document.createElement('p');
+    h.className = 'pick-title';
+    h.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'meta-input';
+    input.value = value;
+    input.placeholder = placeholder;
+    body.append(h, input);
+    return input;
+  };
+  const name = field('书名', data.name || '', '书名');
+  const author = field('作者', data.author || '', '可以不填');
+  const tags = field('标签', (data.tags || []).join(' '), '多个标签用空格隔开');
+  const row = document.createElement('div');
+  row.className = 'sheet-actions';
+  const ok = document.createElement('button');
+  ok.className = 'primary';
+  ok.textContent = '保存';
+  ok.onclick = async () => {
+    const res = await api.post('/api/album/meta', {
+      id: data.id, name: name.value, author: author.value, tags: tags.value.split(/\s+/).filter(Boolean),
+    });
+    if (res.error) return toast(res.error);
+    closeSheet();
+    toast('已保存');
+    await loadShelf();
+    openDetail(data.id, false);
+  };
+  row.appendChild(ok);
+  body.appendChild(row);
+  $('#sheet').classList.remove('hidden');
 }
 
 // 详情页点作者名：复制、搜 TA 的其他作品、收藏 / 拉黑（已经是的就变成取消）
@@ -2686,6 +2736,19 @@ $('#new-group').addEventListener('keydown', (e) => {
 });
 
 $('#btn-drawer').onclick = openDrawer;
+$('#btn-group-author').onclick = async () => {
+  if (!await confirmDialog({
+    title: '按作者一键分组？',
+    message: '还没分组的书里，同一作者有 2 本以上的，会放进以作者命名的分组（作者写了好几位的按第一位）。已经在分组里的书不动。',
+    ok: '分组',
+  })) return;
+  const res = await api.post('/api/group/by-author', { min: 2 });
+  if (res.error) return toast(res.error);
+  shelfGroups = res.groups || shelfGroups;
+  await loadShelf();
+  renderDrawer();
+  toast(res.moved ? `分好了：${res.authors} 位作者，${res.moved} 本` : '没有同一作者 2 本以上、还没分组的书');
+};
 $('#drawer').addEventListener('click', (e) => {
   if (e.target === $('#drawer')) closeDrawer();   // 点遮罩关掉
 });
@@ -2778,9 +2841,11 @@ function openShareSheet(book) {
     deliverFile(j);
   };
 
-  addRow('share', '分享 JM 号', '标题和 JM 号，对方搜这个号就能下', () => {
-    shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
-  });
+  if (!isLocalId(book.id)) {   // 本地导入的没有 JM 号
+    addRow('share', '分享 JM 号', '标题和 JM 号，对方搜这个号就能下', () => {
+      shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
+    });
+  }
   addRow('book', '导出 PDF', '整本合成一个 PDF，电脑、平板直接能看', deliver('pdf'));
   addRow('box', '打包 ZIP', '每页一张原图，打成一个压缩包', deliver('zip'));
   addRow('grid', '分享封面', '只发封面那一张图', deliver('cover'));
@@ -2865,7 +2930,7 @@ async function openStorageSheet() {
 
   // 占地方最多的排在前面，方便挑着删
   for (const b of s.books.filter((x) => !hiddenIds.has(x.id))) {
-    addRow(b.name, `JM${b.id} · ${formatSize(b.size)}`,
+    addRow(b.name, `${jmLabel(b.id)} · ${formatSize(b.size)}`,
       iconButton('trash', '删除这本', 'del danger'), async () => {
       if (!await confirmDialog({
         title: '删除这本？',

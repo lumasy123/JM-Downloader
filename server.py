@@ -273,6 +273,30 @@ def read_meta(album_dir: Path) -> dict:
 _GROUPS_LOCK = threading.Lock()
 
 
+def group_by_author(min_books: int = 2) -> dict:
+    """一键按作者分组：还没分组的书里，同一作者（有好几位的按第一位）有 min_books 本以上的，
+    新建一个以作者命名的分组放进去。已经在分组里的书不动。"""
+    books = [b for b in build_shelf() if not b.get("group") and b.get("author")]
+    by: dict[str, list[str]] = {}
+    for b in books:
+        first = re.split(r"[、,，/／&＆;；]+", b["author"])[0].strip()[:20]
+        if first:
+            by.setdefault(first, []).append(b["id"])
+    picked = {a: ids for a, ids in by.items() if len(ids) >= min_books}
+    with _GROUPS_LOCK:
+        data = load_groups()
+        created = 0
+        for author, ids in sorted(picked.items()):
+            if author not in data["groups"]:
+                data["groups"].append(author)
+                created += 1
+            for i in ids:
+                data["assign"][i] = author
+        save_groups(data)
+    return {"groups": data["groups"], "created": created,
+            "authors": len(picked), "moved": sum(len(v) for v in picked.values())}
+
+
 def load_groups() -> dict:
     """{"groups": [分组名...], "assign": {漫画id: 分组名}}"""
     if GROUPS_PATH.exists():
@@ -594,6 +618,7 @@ def album_summary(album_dir: Path) -> dict | None:
         "expected": int(meta.get("expected_pages") or total),
         "cover": thumb_url(album_dir.name, first),
         "added_at": meta.get("added_at", album_dir.stat().st_mtime),
+        "local": bool(meta.get("local")),
     }
 
 
@@ -643,7 +668,147 @@ def album_detail(album_id: str) -> dict | None:
         "complete": bool(meta.get("complete", True)),
         "expected": int(meta.get("expected_pages") or total),
         "thumb": thumb_url(album_id, first_page(album_dir)),
+        "local": bool(meta.get("local")),
     }
+
+
+# --------------------------------------------------------------------------
+# 导入本地本子：图片（可多张）、ZIP / CBZ、图片型 PDF
+# 导入后和下载的本子一样存在 downloads/ 里（原文件删掉也不影响）。
+# ID 用 10 位、9 开头的数字：禁漫号目前只有 7 位，不会撞；现有各处「只认数字 ID」的校验也不用改
+# --------------------------------------------------------------------------
+LOCAL_ID_BASE = 9_000_000_000
+IMPORT_TMP = DOWNLOAD_DIR.parent / "import_tmp"
+IMPORT_MAX_FILE = 2 * 1024 ** 3      # 单个文件最大 2GB
+_IMPORT_LOCK = threading.Lock()
+
+
+def is_local_id(album_id: str) -> bool:
+    return len(album_id) == 10 and album_id.startswith("9")
+
+
+def _new_local_id() -> str:
+    used = [int(d.name) for d in DOWNLOAD_DIR.iterdir() if d.is_dir() and d.name.isdigit() and is_local_id(d.name)]
+    return str(max(used, default=LOCAL_ID_BASE) + 1)
+
+
+def import_begin() -> dict:
+    import uuid
+    token = uuid.uuid4().hex
+    (IMPORT_TMP / token).mkdir(parents=True, exist_ok=True)
+    # 顺手清掉一天前没导完的临时文件
+    for old in IMPORT_TMP.iterdir():
+        if old.name != token and time.time() - old.stat().st_mtime > 86400:
+            shutil.rmtree(old, ignore_errors=True)
+    return {"token": token}
+
+
+def _import_dir(token: str) -> Path | None:
+    if not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        return None
+    d = IMPORT_TMP / token
+    return d if d.is_dir() else None
+
+
+def _pdf_jpegs(data: bytes) -> list[bytes]:
+    """从 PDF 里按页序取出 JPEG 图片（本 App 和禁漫导出的 PDF 都是一页一张 JPEG）。
+    不依赖第三方库：找 /DCTDecode 的图片对象，截出 stream 里的原始数据。"""
+    out = []
+    for m in re.finditer(rb"<<(?:(?!>>\s*stream).){0,600}?/Subtype\s*/Image(?:(?!>>\s*stream).){0,600}?>>\s*stream\r?\n",
+                         data, re.S):
+        head = m.group(0)
+        if b"DCTDecode" not in head:
+            continue
+        start = m.end()
+        length = re.search(rb"/Length\s+(\d+)(\s+\d+\s+R)?", head)
+        if length and not length.group(2):
+            chunk = data[start:start + int(length.group(1))]
+        else:   # 长度写在别的对象里：找 endstream
+            end = data.find(b"endstream", start)
+            chunk = data[start:end].rstrip(b"\r\n")
+        if chunk[:2] == b"\xff\xd8":
+            out.append(chunk)
+    return out
+
+
+def import_finish(token: str, name: str, author: str, tags: list[str]) -> dict:
+    """把上传好的文件整理成一本书：散图合成一话，每个压缩包 / PDF 各成一话（压缩包里分了文件夹的按文件夹分话）。"""
+    import zipfile
+    src = _import_dir(token)
+    if not src:
+        return {"error": "导入已过期，请重新选择文件"}
+    files = sorted((f for f in src.iterdir() if f.is_file()), key=lambda f: f.name)
+    # 文件名是「序号__原名」：按用户选择的顺序；散图再按原名自然排序
+    chapters: list[tuple[str, list[tuple[str, bytes | Path]]]] = []   # (话名, [(扩展名, 数据或文件)])
+    loose: list[tuple[str, Path]] = []
+    try:
+        for f in files:
+            orig = f.name.split("__", 1)[-1]
+            ext = Path(orig).suffix.lower()
+            if ext in IMAGE_SUFFIXES:
+                loose.append((orig, f))
+            elif ext in (".zip", ".cbz"):
+                with zipfile.ZipFile(f) as z:
+                    groups: dict[str, list[str]] = {}
+                    for n in z.namelist():
+                        base = n.rsplit("/", 1)[-1]
+                        if n.endswith("/") or "__MACOSX" in n or base.startswith("."):
+                            continue
+                        if Path(base).suffix.lower() in IMAGE_SUFFIXES:
+                            groups.setdefault(n.rsplit("/", 1)[0] if "/" in n else "", []).append(n)
+                    if not groups:
+                        return {"error": f"「{orig}」里没有图片"}
+                    multi = len(groups) > 1
+                    for folder in sorted(groups, key=natural_key):
+                        pages = [(Path(n).suffix.lower(), z.read(n)) for n in sorted(groups[folder], key=natural_key)]
+                        title = folder.rsplit("/", 1)[-1] if multi and folder else Path(orig).stem
+                        chapters.append((title, pages))
+            elif ext == ".pdf":
+                jpgs = _pdf_jpegs(f.read_bytes())
+                if not jpgs:
+                    return {"error": f"「{orig}」不是图片型 PDF（每页一张图），暂时导入不了"}
+                chapters.append((Path(orig).stem, [(".jpg", b) for b in jpgs]))
+            else:
+                return {"error": f"不支持「{orig}」这种文件：只能导入图片、ZIP / CBZ、PDF"}
+        if loose:
+            loose.sort(key=lambda x: natural_key(x[0]))
+            chapters.insert(0, (name, [(Path(o).suffix.lower(), f) for o, f in loose]))
+        if not chapters:
+            return {"error": "没有可导入的图片"}
+
+        with _IMPORT_LOCK:
+            album_id = _new_local_id()
+            album_dir = DOWNLOAD_DIR / album_id
+            album_dir.mkdir()
+        total = 0
+        for i, (_, pages) in enumerate(chapters, 1):
+            ch = album_dir / str(i)
+            ch.mkdir()
+            for k, (ext, data) in enumerate(pages, 1):
+                target = ch / f"{k:05d}{'.jpg' if ext == '.jpeg' else ext}"
+                if isinstance(data, Path):
+                    shutil.move(str(data), target)
+                else:
+                    target.write_bytes(data)
+                total += 1
+        meta = {
+            "id": album_id,
+            "name": name or chapters[0][0] or "本地导入",
+            "author": author,
+            "tags": tags,
+            "chapters": [{"index": str(i), "name": t if len(chapters) > 1 else ""}
+                         for i, (t, _) in enumerate(chapters, 1)],
+            "complete": True,
+            "expected_pages": total,
+            "added_at": time.time(),
+            "local": True,
+        }
+        (album_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
+        return {"id": album_id, "name": meta["name"], "pages": total, "chapters": len(chapters)}
+    except zipfile.BadZipFile:
+        return {"error": "压缩包损坏或不是 ZIP 格式"}
+    finally:
+        shutil.rmtree(src, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------
@@ -1255,7 +1420,7 @@ def _feed_updates() -> list[dict]:
     with _FEED_LOCK:
         chk = load_feed().get("chk", {})
     now = time.time()
-    due = sorted((i for i in shelf if now - chk.get(i, {}).get("t", 0) > FEED_CHECK_EVERY),
+    due = sorted((i for i in shelf if not is_local_id(i) and now - chk.get(i, {}).get("t", 0) > FEED_CHECK_EVERY),
                  key=lambda i: chk.get(i, {}).get("t", 0))[:FEED_CHECK_BATCH]
     if due:
         with ThreadPoolExecutor(max_workers=NET_WORKERS) as pool:
@@ -1811,6 +1976,7 @@ LIST_SECTIONS = {
     "shelf": "书架",
     "black-books": "黑名单·本子", "black-tags": "黑名单·标签", "black-authors": "黑名单·作者",
     "fav-tags": "收藏·标签", "fav-authors": "收藏·作者", "fav-dislikes": "反感·标签",
+    "groups": "分组", "ratings": "评分·笔记",
 }
 
 
@@ -1819,7 +1985,9 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
 
     用纯文本是为了能直接贴进聊天软件、用记事本打开。书架、黑名单本子每行只写 JM 号
     （标题导入时再查）；标签、作者名单每行一个。
-    parts 选导出哪几块：shelf / black / fav。
+    parts 选导出哪几块：shelf / black / fav / groups / ratings。
+    分组每行「分组名<Tab>JM号 JM号…」；评分·笔记每行「JM号<Tab>画面 4.5 · 剧情 3<Tab>笔记」。
+    本地导入的书没有 JM 号，换了设备也对不上，这两段里不带。
     """
     parts = set(parts or ["shelf"])
 
@@ -1833,6 +2001,7 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
         if ids:
             keep = set(ids)
             books = [b for b in books if b["id"] in keep]
+        books = [b for b in books if not b.get("local")]   # 本地导入的没有 JM 号，号单里放不了
         count = len(books)
         sections.append(("shelf", [f"JM{b['id']}" for b in books]))
     if "black" in parts:
@@ -1849,12 +2018,33 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
             ("fav-authors", [one_line(a) for a in fav["authors"]]),
             ("fav-dislikes", [one_line(t) for t in fav["dislikes"]]),
         ]
+    wanted = (lambda i: i in set(ids)) if ids else (lambda i: True)
+    if "groups" in parts:
+        g = load_groups()
+        members: dict[str, list[str]] = {name: [] for name in g["groups"]}
+        for album_id, name in g["assign"].items():
+            if wanted(album_id) and not is_local_id(album_id):
+                members.setdefault(name, []).append(f"JM{album_id}")
+        rows = [f"{one_line(name)}\t{' '.join(m)}".rstrip() for name, m in members.items() if m or not ids]
+        sections.append(("groups", rows))
+    if "ratings" in parts:
+        ratings, notes = load_ratings(), load_notes()
+        rows = []
+        for album_id in sorted(set(ratings["scores"]) | set(notes), key=int):
+            if not wanted(album_id) or is_local_id(album_id):
+                continue
+            sc = ratings["scores"].get(album_id, {})
+            if not sc and not notes.get(album_id):
+                continue
+            scores = " · ".join(f"{one_line(c)} {v}" for c, v in sc.items())
+            rows.append(f"JM{album_id}\t{scores}\t{one_line(notes.get(album_id, ''))}".rstrip())
+        sections.append(("ratings", rows))
     sections = [(k, rows) for k, rows in sections if rows]
     total = sum(len(rows) for _, rows in sections)
 
     lines = [
         f"# JM下载器 号单 · {time.strftime('%Y-%m-%d %H:%M')}",
-        "# 书、标签、作者每行一个。导入时按 [分段] 认",
+        "# 书、标签、作者每行一个；分组、评分·笔记每行用 Tab 隔开。导入时按 [分段] 认",
     ]
     for key, rows in sections:
         lines += ["", f"[{LIST_SECTIONS[key]}]", *rows]
@@ -1962,7 +2152,8 @@ def import_backup(data: dict) -> dict:
         if not isinstance(x, dict):
             continue
         album_id = re.sub(r"\D", "", str(x.get("id", "")))
-        if album_id and album_id not in local:
+        # 本地导入的书在别的设备上没法重新下载，不算「缺的」
+        if album_id and album_id not in local and not is_local_id(album_id):
             missing.append({"id": album_id, "name": str(x.get("name", ""))})
 
     return {
@@ -2013,11 +2204,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def body_json(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if not length:
+        raw = getattr(self, "_raw_body", None)
+        if raw is None:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            self._raw_body = raw
+        if not raw:
             return {}
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
 
@@ -2031,6 +2226,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- 路由 ----
     def do_GET(self):
+        self._raw_body = None   # 同一个连接会处理好几个请求，上一个的请求体不能串过来
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -2191,6 +2387,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        # 请求体先整个读掉（上传文件的除外，那个边读边写盘）：有的接口用不到请求体，
+        # 不读的话它会留在长连接里，把同一连接上的下一个请求弄坏
+        self._raw_body = None
+        if path != "/api/import/file":
+            self.body_json()
         if path == "/api/download":
             album_id = re.sub(r"\D", "", str(self.body_json().get("id", "")))
             if not album_id:
@@ -2233,9 +2434,71 @@ class Handler(BaseHTTPRequestHandler):
             parts = body.get("parts") if isinstance(body.get("parts"), list) else None
             return self.send_json(export_jm_list(ids or None, parts, bool(body.get("file", True))))
 
+        if path == "/api/import/begin":
+            return self.send_json(import_begin())
+
+        if path == "/api/import/file":
+            # 一次传一个文件，请求体就是文件本身（不走 multipart，省得解析）
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            d = _import_dir((q.get("token") or [""])[0])
+            try:
+                seq = int((q.get("seq") or ["0"])[0])
+            except ValueError:
+                seq = 0
+            fname = Path((q.get("name") or ["file"])[0]).name[:120] or "file"
+            length = int(self.headers.get("Content-Length") or 0)
+            if not d or length <= 0 or length > IMPORT_MAX_FILE:
+                return self.send_json({"error": "文件太大或导入已过期"}, 400)
+            with open(d / f"{seq:05d}__{fname}", "wb") as fp:
+                left = length
+                while left > 0:
+                    chunk = self.rfile.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    fp.write(chunk)
+                    left -= len(chunk)
+            return self.send_json({"ok": left == 0})
+
+        if path == "/api/import/finish":
+            body = self.body_json()
+            tags = [str(t).strip() for t in body.get("tags") or [] if str(t).strip()][:30]
+            res = import_finish(str(body.get("token", "")), str(body.get("name", "")).strip()[:200],
+                                str(body.get("author", "")).strip()[:100], tags)
+            return self.send_json(res, 400 if res.get("error") else 200)
+
+        if path == "/api/import/cancel":
+            d = _import_dir(str(self.body_json().get("token", "")))
+            if d:
+                shutil.rmtree(d, ignore_errors=True)
+            return self.send_json({"ok": True})
+
         if path == "/api/backup/import":
             res = import_backup(self.body_json())
             return self.send_json(res, 400 if res.get("error") else 200)
+
+        if path == "/api/group/by-author":
+            try:
+                n = max(1, int(self.body_json().get("min", 2)))
+            except (TypeError, ValueError):
+                n = 2
+            return self.send_json(group_by_author(n))
+
+        if path == "/api/album/meta":
+            # 改本地导入的书的书名、作者、标签（下载来的以禁漫为准，不给改）
+            body = self.body_json()
+            album_dir = self.safe_album_dir(str(body.get("id", "")))
+            if not album_dir or not album_dir.is_dir():
+                return self.send_json({"error": "书架上没有这本"}, 400)
+            meta = read_meta(album_dir)
+            if not meta.get("local"):
+                return self.send_json({"error": "只有本地导入的书能改信息"}, 400)
+            name = str(body.get("name", "")).strip()[:200]
+            if name:
+                meta["name"] = name
+            meta["author"] = str(body.get("author", "")).strip()[:100]
+            meta["tags"] = _clean_names(body.get("tags"))[:30]
+            (album_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
+            return self.send_json({"ok": True, "name": meta["name"], "author": meta["author"], "tags": meta["tags"]})
 
         if path == "/api/group/assign":
             body = self.body_json()
@@ -2483,6 +2746,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"error": "not found"}, 404)
 
     def do_DELETE(self):
+        self._raw_body = None   # 同一个连接会处理好几个请求，上一个的请求体不能串过来
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/album":
             query = urllib.parse.parse_qs(parsed.query)
