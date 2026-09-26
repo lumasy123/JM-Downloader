@@ -330,18 +330,23 @@ _FAVORITES_LOCK = threading.Lock()
 
 
 def load_favorites() -> dict:
-    """{"tags": [标签], "authors": [作者], "books": [加了星的漫画id]}"""
+    """{"tags": [收藏的标签], "authors": [收藏的作者], "dislikes": [反感的标签]}
+
+    反感不是拉黑：带反感标签的本子照样显示，只是排序时「收藏标签数 - 反感标签数」往后排。
+    同一个标签只能在收藏、反感其中一边。
+    """
     if FAVORITES_PATH.exists():
         try:
             data = json.loads(FAVORITES_PATH.read_text("utf-8"))
             return {
                 "tags": _clean_names(data.get("tags")),
                 "authors": _clean_names(data.get("authors")),
+                "dislikes": _clean_names(data.get("dislikes")),
                 "books": [str(x) for x in data.get("books", []) if str(x).isdigit()],
             }
         except Exception:
             pass
-    return {"tags": [], "authors": [], "books": []}
+    return {"tags": [], "authors": [], "dislikes": [], "books": []}
 
 
 def save_favorites(data: dict) -> None:
@@ -375,13 +380,24 @@ def load_ratings() -> dict:
             data = json.loads(RATINGS_PATH.read_text("utf-8"))
             criteria = [str(c).strip()[:12] for c in data.get("criteria", []) if str(c).strip()]
             scores = {
-                str(k): {str(c): int(n) for c, n in v.items() if 1 <= int(n) <= 5}
+                str(k): {str(c): _half(n) for c, n in v.items() if _half(n)}
                 for k, v in (data.get("scores") or {}).items() if str(k).isdigit() and isinstance(v, dict)
             }
             return {"criteria": criteria, "scores": scores}
         except Exception:
             pass
     return {"criteria": list(DEFAULT_CRITERIA), "scores": {}}
+
+
+def _half(n) -> float | int | None:
+    """分数只认 0.5~5、以半颗星为单位的；整数分存成整数。不合法的给 None。"""
+    try:
+        v = round(float(n) * 2) / 2
+    except (TypeError, ValueError):
+        return None
+    if not 0.5 <= v <= 5:
+        return None
+    return int(v) if v == int(v) else v
 
 
 def save_ratings(data: dict) -> None:
@@ -419,18 +435,28 @@ def author_keys(author) -> set[str]:
     return {norm_tag(x) for x in [text, *parts] if norm_tag(x)}
 
 
-def change_names(which: str, kind: str, add, remove) -> None:
-    """黑名单 / 收藏名单里的标签、作者，一次加减一批。"""
+def change_names(which: str, kind: str, add, remove) -> list[str]:
+    """黑名单 / 收藏 / 反感名单里的标签、作者，一次加减一批。
+
+    收藏标签和反感标签互斥：加进一边时，如果原来在另一边就从那边拿走。返回被这样挪过来的名字。
+    """
     path_lock = (_BLACKLIST_LOCK, load_blacklist, save_blacklist) if which == "black" \
         else (_FAVORITES_LOCK, load_favorites, save_favorites)
     lock, load, save = path_lock
+    moved: list[str] = []
     with lock:
         data = load()
         drop = {norm_tag(x) for x in (remove or [])}
         cur = [x for x in data[kind] if norm_tag(x) not in drop]
         # 新加的排在前面，名单里最近加的一眼能看到
         data[kind] = _clean_names([*(add or []), *cur])
+        if which == "fav" and kind in ("tags", "dislikes"):
+            other = "dislikes" if kind == "tags" else "tags"
+            adding = {norm_tag(x) for x in (add or [])}
+            moved = [x for x in data[other] if norm_tag(x) in adding]
+            data[other] = [x for x in data[other] if norm_tag(x) not in adding]
         save(data)
+    return moved
 
 
 def norm_tag(tag) -> str:
@@ -1047,6 +1073,7 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
     bad_authors = blocked_authors()
     favorites = load_favorites()
     fav_tags = {norm_tag(t) for t in favorites["tags"]}
+    dis_tags = {norm_tag(t) for t in favorites["dislikes"]}
     fav_authors = {norm_tag(a) for a in favorites["authors"]}
 
     def hit_tags(it: dict) -> list[str]:
@@ -1075,14 +1102,15 @@ def search_albums(keyword: str, kind: str, page: int, show_blocked: bool = False
             shown = [it for it in shown if not hit_tags(it)]
     hidden = len(window) - len(shown) if not show_blocked else 0
 
-    # 按收藏排序：命中的收藏标签越多越前，一样多的有收藏作者的更前，再按原来的顺序
-    if fav_tags:
+    # 按喜好排序：「命中的收藏标签数 - 反感标签数」越大越前，一样的有收藏作者的更前，再按原来的顺序
+    if fav_tags or dis_tags:
         _fill_tags([it for it in shown if not it.get("tags_checked")])
     for it in shown:
         it["fav_tags"] = [t for t in it.get("tags") or [] if norm_tag(t) in fav_tags]
+        it["dis_tags"] = [t for t in it.get("tags") or [] if norm_tag(t) in dis_tags]
         it["fav_author"] = bool(author_keys(it.get("author")) & fav_authors)
-    if fav_tags or fav_authors:
-        shown.sort(key=lambda it: (-len(it["fav_tags"]), -it["fav_author"]))   # sort 是稳定的
+    if fav_tags or dis_tags or fav_authors:
+        shown.sort(key=lambda it: (-(len(it["fav_tags"]) - len(it["dis_tags"])), -it["fav_author"]))  # 稳定排序
     if pooled:
         shown = shown[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
         hidden = 0
@@ -1174,6 +1202,7 @@ def _feed_authors(fav: dict) -> list[dict]:
 def _feed_tags(fav: dict, exclude: set[str]) -> list[dict]:
     """收藏标签一个月内的新本，按和收藏标签的重合个数排。"""
     fav_tags = {norm_tag(t) for t in fav["tags"]}
+    dis_tags = {norm_tag(t) for t in fav["dislikes"]}
     if not fav_tags:
         return []
     client = OPTION.new_jm_client()
@@ -1188,9 +1217,11 @@ def _feed_tags(fav: dict, exclude: set[str]) -> list[dict]:
     _fill_tags(pool_items)
     for it in pool_items:
         it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
+        it["dis_tags"] = [t for t in it["tags"] if norm_tag(t) in dis_tags]
+        it["score"] = len(it["fav_tags"]) - len(it["dis_tags"])
     keep = _feed_keep()
-    return sorted([it for it in pool_items if it["fav_tags"] and keep(it)],
-                  key=lambda it: (-len(it["fav_tags"]), -it["updated"]))
+    return sorted([it for it in pool_items if it["score"] > 0 and keep(it)],
+                  key=lambda it: (-it["score"], -it["updated"]))
 
 
 def _feed_updates() -> list[dict]:
@@ -1283,6 +1314,7 @@ def explore(exclude: set[str]) -> dict:
     import random
     fav = load_favorites()
     fav_tags = {norm_tag(t) for t in fav["tags"]}
+    dis_tags = {norm_tag(t) for t in fav["dislikes"]}
     if not fav_tags:
         return {"items": [], "error": "还没有收藏标签"}
     c = jmcomic.JmMagicConstants
@@ -1322,8 +1354,10 @@ def explore(exclude: set[str]) -> dict:
         if any(norm_tag(t) in bad_tags for t in it["tags"]):
             continue
         it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
-        if it["fav_tags"]:
-            scored.append((len(it["fav_tags"]), random.random(), it))
+        it["dis_tags"] = [t for t in it["tags"] if norm_tag(t) in dis_tags]
+        score = len(it["fav_tags"]) - len(it["dis_tags"])
+        if score > 0:
+            scored.append((score, random.random(), it))
     scored.sort(key=lambda x: (-x[0], x[1]))   # 命中多的在前，一样多的随机
     return {"items": [it for _, _, it in scored[:EXPLORE_SIZE]], "tags": picked}
 
@@ -1671,7 +1705,7 @@ def export_backup(body: dict) -> dict:
 LIST_SECTIONS = {
     "shelf": "书架",
     "black-books": "黑名单·本子", "black-tags": "黑名单·标签", "black-authors": "黑名单·作者",
-    "fav-tags": "收藏·标签", "fav-authors": "收藏·作者",
+    "fav-tags": "收藏·标签", "fav-authors": "收藏·作者", "fav-dislikes": "反感·标签",
 }
 
 
@@ -1708,6 +1742,7 @@ def export_jm_list(ids: list[str] | None = None, parts=None, to_file: bool = Tru
         sections += [
             ("fav-tags", [one_line(t) for t in fav["tags"]]),
             ("fav-authors", [one_line(a) for a in fav["authors"]]),
+            ("fav-dislikes", [one_line(t) for t in fav["dislikes"]]),
         ]
     sections = [(k, rows) for k, rows in sections if rows]
     total = sum(len(rows) for _, rows in sections)
@@ -1779,6 +1814,9 @@ def import_backup(data: dict) -> dict:
         fav = load_favorites()
         fav["tags"] = _clean_names([*fav["tags"], *(fav_in.get("tags") or [])])
         fav["authors"] = _clean_names([*fav["authors"], *(fav_in.get("authors") or [])])
+        liked = {norm_tag(t) for t in fav["tags"]}
+        fav["dislikes"] = [t for t in _clean_names([*fav["dislikes"], *(fav_in.get("dislikes") or [])])
+                           if norm_tag(t) not in liked]
         for x in fav_in.get("books") or []:
             x = re.sub(r"\D", "", str(x))
             if x and x not in fav["books"]:
@@ -1792,7 +1830,7 @@ def import_backup(data: dict) -> dict:
         for k, v in (ratings_in.get("scores") or {}).items():
             k = re.sub(r"\D", "", str(k))
             if k and isinstance(v, dict) and k not in ratings["scores"]:   # 本机已打过分的不覆盖
-                ratings["scores"][k] = {str(c): int(n) for c, n in v.items() if str(n).isdigit() and 1 <= int(n) <= 5}
+                ratings["scores"][k] = {str(c): _half(n) for c, n in v.items() if _half(n)}
         save_ratings(ratings)
 
     marks_in = data.get("bookmarks") if isinstance(data.get("bookmarks"), dict) else {}
@@ -2183,20 +2221,19 @@ class Handler(BaseHTTPRequestHandler):
             # 黑名单 / 收藏里的标签、作者批量加减：{list: black|fav, kind: tags|authors, add: [], remove: []}
             body = self.body_json()
             which, kind = body.get("list"), body.get("kind")
-            if which not in ("black", "fav") or kind not in ("tags", "authors"):
+            if which not in ("black", "fav") or kind not in ("tags", "authors", "dislikes") \
+                    or (kind == "dislikes" and which != "fav"):
                 return self.send_json({"error": "参数不对"}, 400)
-            change_names(which, kind, body.get("add"), body.get("remove"))
-            return self.send_json({"blacklist": load_blacklist(), "favorites": load_favorites()})
+            moved = change_names(which, kind, body.get("add"), body.get("remove"))
+            return self.send_json({"blacklist": load_blacklist(), "favorites": load_favorites(),
+                                   "moved": moved})
 
         if path == "/api/rating":
             # 给一本书的某条标准打分：{id, criterion, score}，score 为 0 就是清掉这条
             body = self.body_json()
             album_id = re.sub(r"\D", "", str(body.get("id", "")))
             criterion = str(body.get("criterion", "")).strip()[:12]
-            try:
-                score = int(body.get("score", 0))
-            except (TypeError, ValueError):
-                score = 0
+            score = _half(body.get("score", 0)) or 0   # 可以是半颗星，比如 3.5
             if not album_id or not (DOWNLOAD_DIR / album_id).is_dir():
                 return self.send_json({"error": "只能给已下载的本子打分"}, 400)
             with _RATINGS_LOCK:
@@ -2204,7 +2241,7 @@ class Handler(BaseHTTPRequestHandler):
                 if criterion not in ratings["criteria"]:
                     return self.send_json({"error": "没有这条评分标准"}, 400)
                 mine = ratings["scores"].setdefault(album_id, {})
-                if 1 <= score <= 5:
+                if score:
                     mine[criterion] = score
                 else:
                     mine.pop(criterion, None)
@@ -2236,6 +2273,26 @@ class Handler(BaseHTTPRequestHandler):
                     data.pop(album_id, None)
                 save_bookmarks(data)
             return self.send_json({"pages": data.get(album_id, [])})
+
+        if path == "/api/rating/criteria/rename":
+            # 改评分项的名字：各本书在这一项打过的分跟着改名
+            body = self.body_json()
+            old = str(body.get("from", "")).strip()
+            new = str(body.get("to", "")).strip()[:12]
+            with _RATINGS_LOCK:
+                ratings = load_ratings()
+                if old not in ratings["criteria"]:
+                    return self.send_json({"error": "没有这个评分项"}, 400)
+                if not new:
+                    return self.send_json({"error": "名字不能为空"}, 400)
+                if new != old and new in ratings["criteria"]:
+                    return self.send_json({"error": "已经有同名的评分项了"}, 400)
+                ratings["criteria"] = [new if c == old else c for c in ratings["criteria"]]
+                for mine in ratings["scores"].values():
+                    if old in mine:
+                        mine[new] = mine.pop(old)
+                save_ratings(ratings)
+            return self.send_json({"criteria": ratings["criteria"]})
 
         if path == "/api/rating/criteria":
             criteria = _clean_names(self.body_json().get("criteria"))[:8]

@@ -84,6 +84,19 @@ class TestNames(Base):
 
     def test_bad_params(self):
         self.assertIn("error", self.post("/api/names", {"list": "x", "kind": "tags"}))
+        self.assertIn("error", self.post("/api/names", {"list": "black", "kind": "dislikes"}))
+
+    def test_fav_dislike_exclusive(self):
+        self.post("/api/names", {"list": "fav", "kind": "tags", "add": ["NTR", "眼镜"]})
+        # 收藏里的标签加进反感：从收藏挪走，并告诉前端挪了哪些
+        res = self.post("/api/names", {"list": "fav", "kind": "dislikes", "add": ["ntr"]})
+        self.assertEqual(res["favorites"]["tags"], ["眼镜"])
+        self.assertEqual(res["favorites"]["dislikes"], ["ntr"])
+        self.assertEqual(res["moved"], ["NTR"])
+        res = self.post("/api/names", {"list": "fav", "kind": "tags", "add": ["NTR"]})
+        self.assertEqual(res["favorites"]["dislikes"], [])
+        self.assertEqual(res["moved"], ["ntr"])
+        self.post("/api/names", {"list": "fav", "kind": "tags", "remove": ["NTR", "眼镜"]})
 
     def test_author_keys(self):
         self.assertEqual(srv.author_keys("甲、乙 & 丙"), {"甲、乙 & 丙", "甲", "乙", "丙"})
@@ -112,6 +125,19 @@ class TestRatingsNotes(Base):
         for c in crit:
             self.post("/api/rating", {"id": "100001", "criterion": c, "score": 0})
         self.assertIsNone([b for b in self.get("/api/shelf")["items"] if b["id"] == "100001"][0]["rating"])
+
+    def test_half_star_and_rename(self):
+        crit = self.get("/api/ratings")["criteria"]
+        self.post("/api/rating", {"id": "100001", "criterion": crit[0], "score": 3.5})
+        self.assertEqual(self.get("/api/ratings")["scores"]["100001"][crit[0]], 3.5)
+        self.post("/api/rating", {"id": "100001", "criterion": crit[0], "score": 3.3})   # 取到最近的半颗
+        self.assertEqual(self.get("/api/ratings")["scores"]["100001"][crit[0]], 3.5)
+        res = self.post("/api/rating/criteria/rename", {"from": crit[0], "to": "作画"})
+        self.assertEqual(res["criteria"][0], "作画")
+        self.assertEqual(self.get("/api/ratings")["scores"]["100001"]["作画"], 3.5)
+        self.assertIn("error", self.post("/api/rating/criteria/rename", {"from": "作画", "to": crit[1]}))
+        self.post("/api/rating/criteria/rename", {"from": "作画", "to": crit[0]})
+        self.post("/api/rating", {"id": "100001", "criterion": crit[0], "score": 0})
 
     def test_rating_needs_downloaded_book(self):
         self.assertIn("error", self.post("/api/rating", {"id": "999999", "criterion": "画面", "score": 3}))

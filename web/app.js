@@ -35,6 +35,8 @@ const ICONS = {
   box: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
   bookmark: 'M6 3h12v18l-6-4.5L6 21z',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z',
+  heart: 'M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7a4.3 4.3 0 0 1 7.5 2.8C19.5 15.4 12 20 12 20z',
+  transfer: 'M7 4v13M3.5 13.5 7 17l3.5-3.5M17 20V7M13.5 10.5 17 7l3.5 3.5',
 };
 
 function svg(name, size = 22) {
@@ -511,10 +513,13 @@ function buildBookCard(book) {
         <div class="title"></div>
         <div class="author"></div>
         <div class="btags"></div>
-        <div class="bnote"></div>
         <div class="bfoot">
           <span class="jmid"></span>
+          <span class="opens"></span>
+          <span class="rate"></span>
+          <span class="readinfo"></span>
         </div>
+        <div class="bnote"></div>
       </div>`;
     const cover = el.querySelector('.cover');
 
@@ -524,13 +529,10 @@ function buildBookCard(book) {
     el.querySelector('img').src = book.cover;
     el.querySelector('.title').textContent = book.name;
 
+    // 作者、标签、JM号、点开次数、评分、进度各占一个固定的位置，没有的留空，
+    // 不同的本子同一项信息总在同一高度。作者在书架上只是显示，进详情页再点才复制
     const author = el.querySelector('.author');
-    if (book.author) {
-      author.textContent = book.author;
-      makeCopyable(author, book.author, () => !selecting);   // 多选时点作者仍是勾选
-    } else {
-      author.remove();
-    }
+    author.textContent = book.author || '';
 
     const tagBox = el.querySelector('.btags');
     for (const t of (book.tags || []).slice(0, 5)) {
@@ -538,25 +540,16 @@ function buildBookCard(book) {
       s.textContent = t;
       tagBox.appendChild(s);
     }
-    if (!tagBox.children.length) tagBox.remove();
 
     el.querySelector('.jmid').textContent = `JM${book.id} · ${book.pages}P`;
-    const opens = openCount(book.id);
-    if (opens >= 2) {
-      const o = document.createElement('span');
-      o.className = 'opens';
-      o.textContent = `点开 ${opens} 次`;
-      el.querySelector('.bfoot').appendChild(o);
-    }
+    el.querySelector('.opens').textContent = `点开 ${openCount(book.id)} 次`;
     if (book.rating != null) {
-      // 综合星级：各条标准打分的平均，四舍五入成几颗星，后面跟具体分数
-      const rate = document.createElement('span');
-      rate.className = 'rate';
-      const n = Math.round(book.rating);
-      rate.textContent = '★'.repeat(n) + '☆'.repeat(5 - n) + ' ' + book.rating.toFixed(1);
+      // 综合星级：各条标准打分的平均，精确到 0.1 颗星，后面跟具体分数
+      const rate = el.querySelector('.rate');
+      rate.append(starBar(book.rating), ' ' + book.rating.toFixed(1));
       rate.title = `综合评分 ${book.rating.toFixed(1)}`;
-      el.querySelector('.bfoot').appendChild(rate);
     }
+    const readInfo = el.querySelector('.readinfo');
 
     // 阅读进度：封面底部一条细进度条 + 文字；翻过页才显示
     const read = getProgress(book.id);
@@ -572,14 +565,14 @@ function buildBookCard(book) {
       const mark = document.createElement('span');
       mark.className = 'readmark' + (finished ? ' done' : '');
       mark.textContent = finished ? '已读完' : `读到 ${read + 1}/${book.pages}`;
-      foot.appendChild(mark);
+      readInfo.appendChild(mark);
     }
     if (book.group && !activeGroup) {
       const tag = document.createElement('span');
       tag.className = 'grouptag';
       tag.innerHTML = svg('folder', 11);
       tag.append(book.group);
-      foot.appendChild(tag);
+      readInfo.appendChild(tag);
     }
 
     // 没下完的：封面变暗加角标，信息区给出已下页数和继续下载
@@ -908,7 +901,12 @@ async function openDetail(id, push = true) {
   if (data.error) return toast('没找到这本漫画');
   detailData = data;
 
-  $('#detail-title').textContent = data.name;
+  const titleEl = $('#detail-title');
+  titleEl.textContent = data.name;
+  titleEl.title = data.name;
+  titleEl.classList.remove('full');
+  // 标题太长只显示一行；鼠标移上去（手机上点一下）展开成多行
+  titleEl.onclick = () => titleEl.classList.toggle('full');
   const saved = getProgress(id);
 
   const body = $('#detail-body');
@@ -937,9 +935,7 @@ async function openDetail(id, push = true) {
     <div id="chapter-list"></div>
     <div class="bm-list hidden" id="bm-list"></div>
     <button class="rating-btn hidden" id="btn-rating"></button>
-    <div class="note-box">
-      <textarea id="detail-note" rows="2" maxlength="2000" placeholder="写点笔记……（只存在这台设备上）"></textarea>
-    </div>`;
+    <p class="detail-notetext hidden" id="detail-note"></p>`;
 
   body.querySelector('.head img').src = data.thumb;
   body.querySelector('.hero-bg').src = data.thumb;
@@ -969,21 +965,26 @@ async function openDetail(id, push = true) {
     authorEl.remove();
   }
 
+  // 标签只是展示（点了不跳转）；末尾一个按钮，挑这本的标签收藏 / 标成反感
   const tagBox = body.querySelector('.detail-tags');
   for (const tag of data.tags || []) {
-    const btn = document.createElement('button');
-    btn.className = 'tag' + (blockedTagSet.has(normTag(tag)) ? ' bad' : '');
+    const btn = document.createElement('span');
+    btn.className = 'tag';
     btn.textContent = tag;
-    // 和搜索结果一致：点一下去搜这个标签
-    bindTagPress(btn, tag, () => {
-      switchView('download');
-      $('#search-input').value = tag;
-      setKind('tag');
-      doSearch();
-    });
+    markTagClass(btn);
     tagBox.appendChild(btn);
   }
-  if (!tagBox.children.length) tagBox.remove();
+  if (tagBox.children.length) {
+    const fav = document.createElement('button');
+    fav.className = 'tag tag-fav-btn';
+    fav.innerHTML = svg('heart', 12) + '<span>收藏标签</span>';
+    fav.onclick = () => openPickSheet('fav', {
+      id: data.id, name: data.name, author: data.author, tags: data.tags || [],
+    });
+    tagBox.appendChild(fav);
+  } else {
+    tagBox.remove();
+  }
 
   body.querySelector('.id').textContent = 'JM' + data.id;
   const total = data.chapters.reduce((n, c) => n + c.pages.length, 0);
@@ -1018,28 +1019,25 @@ async function openDetail(id, push = true) {
   }
 
   // 评分：只给书架上已下载的打；平时只是一个按钮，点了弹出明细
+  // 评分和笔记在同一个弹窗里；详情页上是一个按钮，笔记写过的话在按钮下面显示出来
   const ratingBtn = $('#btn-rating');
+  const noteEl = $('#detail-note');
   const paintRating = () => {
-    const r = book && book.rating;
-    const n = r != null ? Math.round(r) : 0;
-    ratingBtn.innerHTML = '<span class="rl">评分</span><span class="rv"></span><span class="arrow">›</span>';
-    ratingBtn.querySelector('.rv').textContent = r != null
-      ? '★'.repeat(n) + '☆'.repeat(5 - n) + ' ' + r.toFixed(1) : '还没打分';
+    const cur = (book && shelfItems.find((b) => b.id === book.id)) || book;
+    const r = cur && cur.rating;
+    ratingBtn.innerHTML = '<span class="rl">评分 · 笔记</span><span class="rv"></span><span class="arrow">›</span>';
+    const rv = ratingBtn.querySelector('.rv');
+    if (r != null) rv.append(starBar(r), ' ' + r.toFixed(1)); else rv.textContent = '还没打分';
+    const note = (cur && cur.note) || '';
+    noteEl.textContent = note;
+    noteEl.classList.toggle('hidden', !note);
   };
   if (book) {
     ratingBtn.classList.remove('hidden');
     paintRating();
     ratingBtn.onclick = () => openRatingSheet(book, paintRating);
-  }
-
-  // 笔记：离开输入框就存（只有书架上的书能写）
-  const note = $('#detail-note');
-  note.closest('.note-box').classList.toggle('hidden', !book);
-  note.value = (book && book.note) || '';
-  note.onchange = () => saveNote(data.id, note.value.trim());
-  if (book) {
-    const opens = openCount(data.id);
-    if (opens) body.querySelector('.cnt').textContent += ` · 点开 ${opens} 次`;
+    noteEl.onclick = ratingBtn.onclick;
+    body.querySelector('.cnt').textContent += ` · 点开 ${openCount(data.id)} 次`;
   }
 
   const list = $('#chapter-list');
@@ -2002,7 +2000,7 @@ let searchForce = false;   // 上次是不是「纯数字也按关键字搜」
 function renderTags(box, tags) {
   box.innerHTML = '';
   // 拉黑、收藏命中的标签排前面，否则可能正好被截掉看不到
-  const rank = (t) => blockedTagSet.has(normTag(t)) * 2 + favTagSet.has(normTag(t));
+  const rank = (t) => blockedTagSet.has(normTag(t)) * 2 + (favTagSet.has(normTag(t)) || dislikeTagSet.has(normTag(t)));
   const sorted = [...tags].sort((a, b) => rank(b) - rank(a));
   for (const tag of sorted.slice(0, 6)) {
     const btn = document.createElement('button');
@@ -2171,25 +2169,23 @@ function makeCard(item) {
 // 多个关键字的搜索模式：书架和下载页共用一个设置
 function applySearchMode() {
   const mode = pref('jm-search-mode');
-  $$('#search-mode .chip').forEach((c) => c.classList.toggle('active', c.dataset.mode === mode));
-  const btn = $('#shelf-mode');
-  btn.textContent = mode === 'or' ? '或' : '与';
-  btn.title = mode === 'or' ? '多个词：包含其一（点一下切换）' : '多个词：同时包含（点一下切换）';
-  btn.setAttribute('aria-label', btn.title);
+  $$('[data-search-mode]').forEach((btn) => {
+    btn.textContent = mode === 'or' ? '或' : '与';
+    btn.title = mode === 'or' ? '多个词：包含其一（点一下切换）' : '多个词：同时包含（点一下切换）';
+    btn.setAttribute('aria-label', btn.title);
+  });
   if (typeof shelfItems !== 'undefined' && shelfQuery.trim().includes(' ')) renderShelf();
 }
-$$('#search-mode .chip').forEach((c) => {
-  c.onclick = () => {
-    if (pref('jm-search-mode') === c.dataset.mode) return;
-    setPref('jm-search-mode', c.dataset.mode);
-    // 已经搜了多个词的话，换了模式马上重搜
-    const q = $('#search-input').value.trim();
-    if (q.includes(' ') && !ID_INPUT.test(q)) doSearch(1);
-  };
-});
-$('#shelf-mode').onclick = () => {
+const toggleSearchMode = () => {
   setPref('jm-search-mode', pref('jm-search-mode') === 'or' ? 'and' : 'or');
   toast(pref('jm-search-mode') === 'or' ? '多个词：包含其一' : '多个词：同时包含');
+};
+$('#shelf-mode').onclick = toggleSearchMode;
+$('#search-mode').onclick = () => {
+  toggleSearchMode();
+  // 已经搜了多个词的话，换了模式马上重搜
+  const q = $('#search-input').value.trim();
+  if (q.includes(' ') && !ID_INPUT.test(q) && $('#search-results').children.length) doSearch(1);
 };
 applySearchMode();
 
@@ -2468,15 +2464,10 @@ $('#btn-drawer').onclick = openDrawer;
 $('#drawer').addEventListener('click', (e) => {
   if (e.target === $('#drawer')) closeDrawer();   // 点遮罩关掉
 });
-$('#mine-blacklist').onclick = openBlacklistSheet;
-$('#mine-tagblack').onclick = () => openNameSheet('black-tags');
-$('#mine-authorblack').onclick = () => openNameSheet('black-authors');
-$('#mine-favtags').onclick = () => openNameSheet('fav-tags');
-$('#mine-favauthors').onclick = () => openNameSheet('fav-authors');
+$('#mine-prefs').onclick = openPrefsSheet;
 
 async function refreshMine() {
-  const [items] = await Promise.all([loadBlacklist(), loadFavorites()]);
-  $('#mine-blacklist-count').textContent = items.length ? `${items.length} 本` : '空';
+  await Promise.all([loadBlacklist(), loadFavorites()]);
   updateNameCounts();
   $('#mine-storage-size').textContent = '计算中…';
   const s = await api.get('/api/storage');
@@ -2669,15 +2660,7 @@ async function autoBackup() {
 setTimeout(autoBackup, 20000);
 
 async function exportBackup() {
-  const res = await api.post('/api/backup/export', {
-    // 分组和黑名单在服务端，阅读进度只存在这边的本地存储里，一起带过去
-    progress: collectLocal('jm-pos-'),
-    read: collectLocal('jm-read-'),
-    settings: {
-      fitHeight: localStorage.getItem('jm-fit-height'),
-      shelfSort: localStorage.getItem('jm-shelf-sort'),
-    },
-  });
+  const res = await api.post('/api/backup/export', backupBody());
   if (res.error) return toast(res.error);
   // 安卓上文件在 App 私有目录里，直接弹系统分享，发到网盘 / 聊天软件保存
   if (window.AndroidApp && window.AndroidApp.shareFile && window.AndroidApp.shareFile(res.path)) {
@@ -2732,8 +2715,7 @@ async function importBackup(file) {
 }
 
 $('#mine-storage').onclick = openStorageSheet;
-$('#mine-export').onclick = exportBackup;
-$('#mine-import').onclick = () => $('#backup-file').click();
+$('#mine-transfer').onclick = () => openTransferSheet();   // io.js 里定义，比这里晚加载
 $('#backup-file').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';   // 清掉，下次选同一个文件也能触发

@@ -1936,8 +1936,30 @@ body.masked .mw-all::after { transform: none; }
 .rating-row { display: flex; align-items: center; gap: 2px; }
 .rating-name { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rstar { width: 34px; height: 34px; padding: 0; border: 0; background: none; color: var(--line); cursor: pointer; }
-.rstar.on { color: #ffc93c; }
-.rstar.on svg path { fill: currentColor; }
+/* 可以亮一半的星：底下空心的，上面叠一颗实心的按宽度裁（.sfill 的 width） */
+.rating-row .rstar { position: relative; flex: none; width: 32px; }
+.rating-row .rstar > svg, .rstar .sfill > svg { position: absolute; left: 5px; top: 6px; }
+.rstar .sfill { position: absolute; left: 5px; top: 0; bottom: 0; overflow: hidden; color: #ffc93c; pointer-events: none; }
+.rstar .sfill > svg { left: 0; }
+.rstar .sfill svg path { fill: currentColor; }
+.rstar.on > svg { color: #ffc93c; }
+.rclear { flex: none; margin-left: 4px; padding: 3px 6px; border: 0; border-radius: 6px; background: var(--surface-2); color: var(--muted); font-size: 11px; cursor: pointer; }
+.rclear.invisible { visibility: hidden; }
+.rname { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+  text-decoration: underline dotted color-mix(in srgb, var(--muted) 60%, transparent); text-underline-offset: 3px; }
+.crit-edit { width: 100%; max-width: 160px; height: 30px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 13px; outline: none; }
+.sheet-item .rname { flex: 1; text-align: left; font-size: 14px; }
+.sheet-item .crit-edit { flex: 1; max-width: none; }
+.note-input { width: 100%; min-height: 72px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; resize: vertical; outline: none; box-sizing: border-box; }
+.note-input:focus { border-color: var(--accent); }
+
+/* 星级显示：精确到 0.1 颗星，金色那层按分数裁宽度 */
+.stars { position: relative; display: inline-block; color: var(--line); line-height: 1; letter-spacing: 0; white-space: nowrap; }
+.stars::before { content: '★★★★★'; }
+.stars > i { position: absolute; left: 0; top: 0; overflow: hidden; color: #ffc93c; font-style: normal; }
+.stars > i::before { content: '★★★★★'; }
 
 /* ---------- 动态分栏、探索 ---------- */
 .seg { display: flex; gap: 6px; margin: 14px 16px 6px; padding: 4px; border-radius: 12px; background: var(--surface-2); }
@@ -2096,3 +2118,66 @@ body.masked .mw-all::after { transform: none; }
 .suggest .ghost { margin-top: 12px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; }
 #search-results .suggest { grid-column: 1 / -1; margin: 0; }
 .explore-go { grid-column: 1 / -1; height: 40px; border: 0; border-radius: 10px; }
+
+/* ---------- 书架卡片：每项信息一个固定槽位，不同本子同一项总在同一高度 ---------- */
+.book .title { height: 2.8em; }
+.book .author { min-height: 1.35em; line-height: 1.35; }
+.book .author:empty::before, .book .btags:empty::before { content: '\00a0'; }
+.book .btags { height: 1.9em; }
+.book .bfoot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-auto-rows: minmax(17px, auto);
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: auto;
+}
+.book .bfoot > .jmid { grid-area: 1 / 1; }
+.book .bfoot > .opens { grid-area: 1 / 2; justify-self: end; }
+.book .bfoot > .rate { grid-area: 2 / 1; }
+.book .bfoot > .readinfo { grid-area: 2 / 2; justify-self: end; }
+.book .bfoot > .resume { grid-column: 1 / -1; justify-self: start; }
+.book .readinfo { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.book .rate { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.book .bnote:empty { display: none; }
+.grid.wall .book .bfoot { grid-template-columns: minmax(0, 1fr); gap: 1px; margin-top: 0; }
+.grid.wall .book .bfoot > * { grid-area: auto; justify-self: start; }
+.grid.wall .book .bfoot > .readinfo:empty::before, .grid.wall .book .bfoot > .rate:empty::before { content: '\00a0'; }
+.grid.wall .book .jmid, .grid.wall .book .opens, .grid.wall .book .readmark, .grid.wall .book .rate { font-size: 11px; line-height: 16px; }
+
+/* ---------- 详情：标题悬停 / 点一下展开全文；标签收藏按钮；笔记 ---------- */
+#detail-title { cursor: pointer; }
+#detail-title.full { white-space: normal; font-size: 17px; line-height: 1.35; }
+@media (hover: hover) {
+  #detail-title:hover { white-space: normal; font-size: 17px; line-height: 1.35; }
+}
+.detail-tags .tag { cursor: default; }
+.detail-tags .tag-fav-btn { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  border: 1px dashed var(--accent); background: none; color: var(--accent); }
+.detail-tags .tag-fav-btn svg { width: 12px; height: 12px; }
+.card .tag.dis,
+.detail-tags .tag.dis { background: color-mix(in srgb, #f06a6a 14%, var(--surface-2)); color: #e05656; }
+.pickchip.dis { background: #e05656; border-color: #e05656; color: #fff; }
+.pickchip.dis::before { content: '反感 '; font-size: 11px; opacity: .85; }
+.detail-notetext { margin: 8px 2px 0; padding: 10px 12px; border-radius: 12px; background: var(--surface);
+  color: var(--muted); font-size: 13px; white-space: pre-wrap; word-break: break-word; cursor: pointer; }
+.detail-notetext::before { content: '✎ '; }
+.rating-btn .rv { display: inline-flex; justify-content: flex-end; align-items: center; gap: 4px; }
+
+/* ---------- 喜好管理、导出 / 导入：顶上的切换 ---------- */
+.chips.pref-tabs { margin: 0 0 12px; padding: 0; }
+.backup-block { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--line); }
+.wide { width: 100%; }
+
+/* ---------- 下载页：与 / 或 切换，和书架一样 ---------- */
+.input-row .mode-toggle {
+  flex: none;
+  width: 42px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}

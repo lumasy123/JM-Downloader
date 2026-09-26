@@ -1,4 +1,4 @@
-/* 黑名单、收藏、评分：名单数据、拉黑 / 收藏弹窗、名单管理弹层、评分窗口。
+/* 黑名单、收藏、反感、评分：名单数据、拉黑 / 收藏弹窗、喜好管理弹层、评分窗口。
  * 在 app.js 之前加载：这里只有函数和变量，顶层不执行任何东西，app.js 加载时就能直接引用。
  */
 
@@ -37,37 +37,52 @@ let favTags = [];
 let favTagSet = new Set();
 let favAuthors = [];
 let favAuthorSet = new Set();
+// 反感的标签：不是拉黑，本子照样显示；搜索排序按「收藏标签数 - 反感标签数」
+let dislikeTags = [];
+let dislikeTagSet = new Set();
 
 function applyFavorites(res) {
   favTags = res.tags || [];
   favTagSet = new Set(favTags.map(normTag));
   favAuthors = res.authors || [];
   favAuthorSet = new Set(favAuthors.map(normTag));
+  dislikeTags = res.dislikes || [];
+  dislikeTagSet = new Set(dislikeTags.map(normTag));
 }
 
 async function loadFavorites() {
   applyFavorites(await api.get('/api/favorites'));
 }
 
-// 黑名单 / 收藏里的标签、作者一次加减一批，改完把界面上的标记刷新一遍
+// 黑名单 / 收藏 / 反感里的标签、作者一次加减一批，改完把界面上的标记刷新一遍。
+// 收藏标签和反感标签互斥：服务端会把另一边的挪过来，这里提示一声；返回挪过的名字
 async function setNames(list, kind, add = [], remove = []) {
   const res = await api.post('/api/names', { list, kind, add, remove });
   if (res.error) { toast(res.error); return false; }
+  const moved = res.moved || [];
+  if (moved.length) {
+    const names = moved.map((t) => `「${t}」`).join('');
+    toast(kind === 'dislikes'
+      ? `${names}已收藏，现取消收藏并转移到反感标签`
+      : `${names}原本在反感标签，现取消反感并转移到收藏标签`);
+  }
   applyBlacklist(res.blacklist);
   applyFavorites(res.favorites);
   feedStale = true;   // 收藏、拉黑变了，动态要重新取
   markAllCards();
   markDetailTags();
   updateNameCounts();
-  return true;
+  return { moved };
 }
 
 async function openBlacklistSheet() {
   const items = await loadBlacklist();
-  $('#sheet-title').textContent = `本子黑名单（${items.length}）`;
-  $('#mine-blacklist-count').textContent = items.length ? `${items.length} 本` : '空';
+  await loadFavorites();
+  updateNameCounts();
+  $('#sheet-title').textContent = '喜好管理';
   const list = $('#sheet-body');
   list.innerHTML = '';
+  list.appendChild(prefTabs('black-books'));
 
   if (!items.length) {
     const tip = document.createElement('div');
@@ -118,15 +133,28 @@ function markCard(albumId, blocked) {
   }
 }
 
-/* ---- 标签按钮：点一下按这个标签搜。拉黑 / 收藏改到搜索卡片上的按钮里挑 ---- */
+/* ---- 标签按钮：点一下按这个标签搜（onTap 为空就只是个展示）。拉黑 / 收藏在卡片上的按钮里挑 ---- */
 function bindTagPress(btn, tag, onTap) {
   btn.onclick = (e) => {
     e.stopPropagation();
-    onTap();
+    if (onTap) onTap();
   };
 }
 
-/* ---- 评分：自定义的几条标准，每条 1~5 分，平均分用来排序、筛选 ---- */
+/* ---- 星级显示：精确到 0.1 颗，从左往右填，4.3 分就是 4 颗满 + 第 5 颗亮左边 3/10 ---- */
+function starBar(value) {
+  const el = document.createElement('span');
+  el.className = 'stars';
+  const fill = document.createElement('i');
+  // 先取到一位小数，和旁边写的分数对得上（4.25 显示 4.3，就亮 4.3 颗）
+  const v = Math.round(Math.max(0, Math.min(5, value || 0)) * 10) / 10;
+  fill.style.width = v / 5 * 100 + '%';
+  el.appendChild(fill);
+  el.setAttribute('aria-label', value != null ? `${value.toFixed(1)} 分` : '还没打分');
+  return el;
+}
+
+/* ---- 评分：自定义的几条标准，每条 0.5~5 分（可以打半颗星），平均分用来排序、筛选 ---- */
 let ratingCriteria = [];
 
 async function loadCriteria() {
@@ -149,10 +177,10 @@ async function setRating(id, criterion, score) {
   return res;
 }
 
-// 评分窗口：每条标准一排五颗星，底下能直接增删评分项
+// 评分窗口：每条标准一排五颗星，能直接增删改评分项；底下是这本的笔记
 async function openRatingSheet(book, onChange) {
   if (!ratingCriteria.length) await loadCriteria();
-  $('#sheet-title').textContent = '评分';
+  $('#sheet-title').textContent = '评分和笔记';
   const body = $('#sheet-body');
   body.innerHTML = '';
   const box = document.createElement('div');
@@ -180,10 +208,77 @@ async function openRatingSheet(book, onChange) {
   edit.append(input, add);
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = '点第几颗星就是几分，再点同一颗清掉；综合分是各项的平均。点评分项名字旁的 × 可以删掉这一项（打过的分会留着，加回来还在）。';
-  body.append(edit, tip);
+  tip.textContent = '点第几颗星就是几分，再点同一颗变成半颗（比如点两下第 4 颗是 3.5 分），再点又回到整颗；综合分是各项的平均。点评分项的名字可以改名，点旁边的 × 删掉这一项。';
+
+  // 笔记：只存在这台设备上，离开输入框就存
+  const noteTitle = document.createElement('p');
+  noteTitle.className = 'pick-title';
+  noteTitle.textContent = '笔记';
+  const note = document.createElement('textarea');
+  note.className = 'note-input';
+  note.rows = 3;
+  note.maxLength = 2000;
+  note.placeholder = '写点笔记……（只存在这台设备上）';
+  const fresh = () => shelfItems.find((b) => b.id === book.id) || book;
+  note.value = fresh().note || '';
+  let savedNote = note.value.trim();
+  const commitNote = async () => {
+    const text = note.value.trim();
+    if (text === savedNote) return;
+    savedNote = text;
+    if (await saveNote(book.id, text) && onChange) onChange();
+  };
+  note.onchange = commitNote;
+  note.onblur = commitNote;
+  body.append(edit, tip, noteTitle, note);
   refresh();
   $('#sheet').classList.remove('hidden');
+}
+
+// 评分项改名：打过的分跟着改名
+async function renameCriterion(from, to) {
+  to = String(to || '').trim();
+  if (!to || to === from) return false;
+  const res = await api.post('/api/rating/criteria/rename', { from, to });
+  if (res.error) { toast(res.error); return false; }
+  await loadCriteria();
+  await loadShelf();
+  return true;
+}
+
+// 删评分项前先问一句
+async function confirmDropCriterion(c) {
+  if (ratingCriteria.length <= 1) { toast('至少留一项'); return false; }
+  return confirmDialog({
+    title: `删掉评分项「${c}」？`,
+    message: '各本书在这一项打过的分会留着，以后加回同名的评分项还在。',
+    ok: '删除', danger: true,
+  });
+}
+
+// 把一个名字元素原地换成输入框改名；回车或离开输入框就保存
+function editCriterionInline(el, c, after) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 12;
+  input.value = c;
+  input.className = 'crit-edit';
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    if (save && await renameCriterion(c, input.value)) toast(`已改名为「${input.value.trim()}」`);
+    after();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(true);
+  input.onclick = (e) => e.stopPropagation();
+  el.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 async function saveCriteria(list) {
@@ -194,7 +289,16 @@ async function saveCriteria(list) {
   return true;
 }
 
-// 评分明细：每条标准一排五颗星，点第几颗就是几分，再点同一颗清掉
+// 点第 n 颗星：没到这颗就打 n 分；正好 n 分就减成半颗（n - 0.5）；是半颗的再点回到 n 分
+const nextScore = (cur, n) => (cur === n ? n - 0.5 : n);
+
+// 一颗可以亮一半的星：底下一颗空心的，上面叠一颗实心的按宽度裁
+function halfStar(frac, size) {
+  return svg('star', size)
+    + `<span class="sfill" style="width:${frac * size}px">${svg('star', size)}</span>`;
+}
+
+// 评分明细：每条标准一排五颗星，可以打半颗
 function renderRatingBox(box, book, onChange) {
   // 书架刷新后换成最新的那份数据
   book = shelfItems.find((b) => b.id === book.id) || book;
@@ -208,39 +312,50 @@ function renderRatingBox(box, book, onChange) {
   avg.textContent = book.rating != null ? `综合 ${book.rating.toFixed(1)}` : '还没打分';
   head.append(title, avg);
   box.appendChild(head);
+  const redraw = () => {
+    renderRatingBox(box, book, onChange);
+    if (onChange) onChange();
+  };
   for (const c of ratingCriteria) {
     const row = document.createElement('div');
     row.className = 'rating-row';
     const name = document.createElement('span');
     name.className = 'rating-name';
-    name.textContent = c;
+    const label = document.createElement('button');
+    label.className = 'rname';
+    label.textContent = c;
+    label.title = '点一下改名';
+    label.onclick = () => editCriterionInline(label, c, redraw);
     const del = document.createElement('button');
     del.className = 'rdel';
     del.innerHTML = svg('close', 12);
     del.setAttribute('aria-label', `删掉评分项「${c}」`);
     del.onclick = async () => {
-      if (ratingCriteria.length <= 1) return toast('至少留一项');
-      if (await saveCriteria(ratingCriteria.filter((x) => x !== c))) {
-        renderRatingBox(box, book, onChange);
-        if (onChange) onChange();
-      }
+      if (!await confirmDropCriterion(c)) return;
+      if (await saveCriteria(ratingCriteria.filter((x) => x !== c))) redraw();
     };
-    name.appendChild(del);
+    name.append(label, del);
     row.appendChild(name);
     const cur = (book.scores || {})[c] || 0;
     for (let n = 1; n <= 5; n++) {
       const star = document.createElement('button');
-      star.className = 'rstar' + (n <= cur ? ' on' : '');
-      star.innerHTML = svg('star', 22);
+      const frac = Math.max(0, Math.min(1, cur - (n - 1)));
+      star.className = 'rstar' + (frac > 0 ? ' on' : '');
+      star.innerHTML = halfStar(frac, 22);
       star.setAttribute('aria-label', `${c} ${n} 分`);
       star.onclick = async () => {
-        if (await setRating(book.id, c, n === cur ? 0 : n)) {
-          renderRatingBox(box, book, onChange);
-          if (onChange) onChange();
-        }
+        if (await setRating(book.id, c, nextScore(cur, n))) redraw();
       };
       row.appendChild(star);
     }
+    const clear = document.createElement('button');
+    clear.className = 'rclear' + (cur ? '' : ' invisible');
+    clear.textContent = '清除';
+    clear.setAttribute('aria-label', `清除「${c}」的分`);
+    clear.onclick = async () => {
+      if (await setRating(book.id, c, 0)) redraw();
+    };
+    row.appendChild(clear);
     box.appendChild(row);
   }
 }
@@ -279,22 +394,23 @@ async function openCriteriaSheet() {
   body.appendChild(row);
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = '每本书按这几条各打 1~5 分，书架按平均分排序、筛选。点一下去掉一条（打过的分会留着，加回来还在）。';
+  tip.textContent = '每本书按这几条各打 0.5~5 分，书架按平均分排序、筛选。点名字改名，点 × 删掉一条（打过的分会留着，加回来还在）。';
   body.appendChild(tip);
-  const chips = document.createElement('div');
-  chips.className = 'tagchips';
   for (const c of ratingCriteria) {
-    const chip = document.createElement('button');
-    chip.className = 'tagchip';
-    chip.innerHTML = '<span></span>' + svg('close', 14);
-    chip.querySelector('span').textContent = c;
-    chip.onclick = () => {
-      if (ratingCriteria.length <= 1) return toast('至少留一条');
-      save(ratingCriteria.filter((x) => x !== c));
+    const item = document.createElement('div');
+    item.className = 'sheet-item';
+    const name = document.createElement('button');
+    name.className = 'name rname';
+    name.textContent = c;
+    name.title = '点一下改名';
+    name.onclick = () => editCriterionInline(name, c, openCriteriaSheet);
+    const del = iconButton('close', `删掉「${c}」`, 'del');
+    del.onclick = async () => {
+      if (await confirmDropCriterion(c)) save(ratingCriteria.filter((x) => x !== c));
     };
-    chips.appendChild(chip);
+    item.append(name, del);
+    body.appendChild(item);
   }
-  body.appendChild(chips);
   $('#sheet').classList.remove('hidden');
 }
 
@@ -339,10 +455,14 @@ function markTagBlocked(card) {
     authorEl.classList.toggle('bad', authorBad);
     authorEl.classList.toggle('fav', hasAuthor(favAuthorSet, authorEl.textContent));
   }
-  card.querySelectorAll('.tag').forEach((b) => {
-    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent)));
-    b.classList.toggle('fav', favTagSet.has(normTag(b.textContent)));
-  });
+  card.querySelectorAll('.tag').forEach(markTagClass);
+}
+
+function markTagClass(b) {
+  const t = normTag(b.textContent);
+  b.classList.toggle('bad', blockedTagSet.has(t));
+  b.classList.toggle('fav', favTagSet.has(t));
+  b.classList.toggle('dis', dislikeTagSet.has(t));
 }
 
 function markAllCards() {
@@ -350,18 +470,17 @@ function markAllCards() {
 }
 
 function markDetailTags() {
-  $$('.detail-tags .tag').forEach((b) => {
-    b.classList.toggle('bad', blockedTagSet.has(normTag(b.textContent)));
-    b.classList.toggle('fav', favTagSet.has(normTag(b.textContent)));
-  });
+  $$('.detail-tags .tag').forEach(markTagClass);
 }
 
-/* ---- 搜索卡片上的「拉黑」「收藏」：弹窗里勾这本的作者、标签（拉黑还能勾这一本） ---- */
+/* ---- 搜索卡片上的「拉黑」「收藏」：弹窗里勾这本的作者、标签（拉黑还能勾这一本）。
+ * 收藏弹窗里的标签点一下收藏、再点一下改成反感、再点取消 ---- */
+const TAG_STATES = ['', 'on', 'dis'];
 async function openPickSheet(list, item) {
   const black = list === 'black';
-  let tags = null;
+  let tags = item.tags || null;
   const card = $$('.card').find((c) => c.dataset.id === item.id);
-  if (card && card.dataset.tags) {
+  if (!tags && card && card.dataset.tags) {
     try { tags = JSON.parse(card.dataset.tags); } catch (_) {}
   }
   if (!tags) {
@@ -375,9 +494,10 @@ async function openPickSheet(list, item) {
   $('#sheet-title').textContent = black ? '拉黑' : '收藏';
   const body = $('#sheet-body');
   body.innerHTML = '';
-  const picks = [];   // { kind, name, was, chip }
+  const picks = [];   // { kind, name, was, chip }；was / 现在的状态：'' 没选、'on' 选中、'dis' 反感
+  const stateOf = (chip) => TAG_STATES.find((s) => s && chip.classList.contains(s)) || '';
 
-  const section = (title, entries) => {
+  const section = (title, entries, cycle) => {
     if (!entries.length) return;
     const h = document.createElement('p');
     h.className = 'pick-title';
@@ -386,32 +506,36 @@ async function openPickSheet(list, item) {
     box.className = 'pickchips';
     for (const [kind, name, was, preset] of entries) {
       const chip = document.createElement('button');
-      chip.className = 'pickchip';
+      chip.className = 'pickchip' + (preset ? ' ' + preset : '');
       chip.textContent = name;
-      const pick = { kind, name, was, chip };
-      chip.classList.toggle('on', preset);
-      chip.onclick = () => chip.classList.toggle('on');
-      picks.push(pick);
+      picks.push({ kind, name, was, chip });
+      chip.onclick = () => {
+        const cur = stateOf(chip);
+        const next = cycle ? TAG_STATES[(TAG_STATES.indexOf(cur) + 1) % 3] : (cur ? '' : 'on');
+        chip.classList.remove('on', 'dis');
+        if (next) chip.classList.add(next);
+      };
       box.appendChild(chip);
     }
     body.append(h, box);
   };
 
-  if (black) section('这一本', [['book', item.name || ('JM' + item.id), blockedIds.has(item.id), true]]);
+  if (black) section('这一本', [['book', item.name || ('JM' + item.id), blockedIds.has(item.id) ? 'on' : '', 'on']]);
   if (item.author) {
-    const was = hasAuthor(authorSet, item.author);
+    const was = hasAuthor(authorSet, item.author) ? 'on' : '';
     section('作者', [['authors', item.author, was, was]]);
   }
   section('标签', tags.map((t) => {
-    const was = tagSet.has(normTag(t));
+    const k = normTag(t);
+    const was = tagSet.has(k) ? 'on' : (!black && dislikeTagSet.has(k)) ? 'dis' : '';
     return ['tags', t, was, was];
-  }));
+  }), !black);
 
   const tip = document.createElement('p');
   tip.className = 'hint';
   tip.textContent = black
     ? '点一下选中 / 取消。拉黑的作者、标签，之后搜索时带它们的本子都不显示；已拉黑的取消勾选就是解除。'
-    : '点一下选中 / 取消。收藏的标签越多、有收藏作者的本子，搜索时排得越前；收藏的作者出新本会出现在「动态」里。';
+    : '标签点一下收藏，再点一下改成反感（红色），再点取消。搜索时按「收藏标签数 - 反感标签数」排序，有收藏作者的更前；收藏的作者出新本会出现在「动态」里。';
   body.appendChild(tip);
 
   const row = document.createElement('div');
@@ -421,29 +545,37 @@ async function openPickSheet(list, item) {
   ok.textContent = black ? '确定拉黑' : '保存收藏';
   ok.onclick = async () => {
     ok.disabled = true;
-    const diff = { tags: { add: [], remove: [] }, authors: { add: [], remove: [] } };
+    const diff = { tags: { add: [], remove: [] }, authors: { add: [], remove: [] }, dislikes: { add: [], remove: [] } };
     let bookChange = null;
     for (const p of picks) {
-      const on = p.chip.classList.contains('on');
-      if (on === p.was) continue;
-      if (p.kind === 'book') bookChange = on;
-      else diff[p.kind][on ? 'add' : 'remove'].push(p.name);
+      const now = stateOf(p.chip);
+      if (now === p.was) continue;
+      if (p.kind === 'book') { bookChange = !!now; continue; }
+      // 反感的标签单独一份名单；收藏 ↔ 反感互转时服务端会自动从另一边拿走
+      const kindOf = (st) => (p.kind === 'tags' && st === 'dis' ? 'dislikes' : p.kind);
+      if (now) diff[kindOf(now)].add.push(p.name);
+      else diff[kindOf(p.was)].remove.push(p.name);
     }
-    for (const kind of ['tags', 'authors']) {
+    let moved = 0;
+    for (const kind of ['tags', 'authors', 'dislikes']) {
       if (diff[kind].add.length || diff[kind].remove.length) {
-        await setNames(list, kind, diff[kind].add, diff[kind].remove);
+        const res = await setNames(list, kind, diff[kind].add, diff[kind].remove);
+        if (res) moved += res.moved.length;
       }
     }
     if (bookChange !== null) await toggleBlock(item, true);
     $('#sheet').classList.add('hidden');
+    if (moved) return;   // 已经提示过「转移到…」了
     const added = [...diff.tags.add, ...diff.authors.add];
     const n = added.length + (bookChange ? 1 : 0);
-    if (!n && !diff.tags.remove.length && !diff.authors.remove.length && bookChange === null) return;
+    const removed = diff.tags.remove.length + diff.authors.remove.length;
+    if (!n && !removed && bookChange === null && !diff.dislikes.add.length && !diff.dislikes.remove.length) return;
     if (black) {
       toast(n ? `已拉黑 ${n} 项，下次搜索起不再显示` : '已更新黑名单');
     } else if (!(added.length && window.petFavorited
       && petFavorited({ tags: diff.tags.add, authors: diff.authors.add }))) {
-      toast(added.length ? `已收藏 ${added.length} 项` : '已更新收藏');
+      toast(added.length ? `已收藏 ${added.length} 项`
+        : diff.dislikes.add.length ? `已把 ${diff.dislikes.add.length} 个标签标成反感` : '已更新喜好');
     }
   };
   row.appendChild(ok);
@@ -451,40 +583,83 @@ async function openPickSheet(list, item) {
   $('#sheet').classList.remove('hidden');
 }
 
-/* ---- 名单弹层：标签黑名单、作者黑名单、收藏的标签、收藏的作者共用 ---- */
+/* ---- 喜好管理：本子黑名单、拉黑的标签 / 作者、收藏的标签 / 作者、反感的标签，一个弹层里切换 ---- */
 const NAME_LISTS = {
   'black-tags': {
-    list: 'black', kind: 'tags', title: '标签黑名单', unit: '个', count: '#mine-tagblack-count',
+    list: 'black', kind: 'tags', title: '标签黑名单', short: '拉黑标签', unit: '个',
     placeholder: '输入要拉黑的标签', tip: '点一下移出黑名单。',
     empty: '还没有拉黑任何标签。在搜索结果里点「拉黑」，可以挑这本的标签拉黑。',
   },
   'black-authors': {
-    list: 'black', kind: 'authors', title: '作者黑名单', unit: '位', count: '#mine-authorblack-count',
+    list: 'black', kind: 'authors', title: '作者黑名单', short: '拉黑作者', unit: '位',
     placeholder: '输入要拉黑的作者', tip: '点一下移出黑名单。',
     empty: '还没有拉黑任何作者。在搜索结果里点「拉黑」，可以把这本的作者拉黑。',
   },
   'fav-tags': {
-    list: 'fav', kind: 'tags', title: '收藏的标签', unit: '个', count: '#mine-favtags-count',
-    placeholder: '输入要收藏的标签', tip: '点一下取消收藏。搜索时带这些标签越多的本子排得越前。',
+    list: 'fav', kind: 'tags', title: '收藏的标签', short: '收藏标签', unit: '个',
+    placeholder: '输入要收藏的标签', tip: '点一下取消收藏。搜索时按「收藏标签数 - 反感标签数」排序，越多越前。',
     empty: '还没有收藏标签。在搜索结果里点「收藏」，可以挑喜欢的标签。',
   },
   'fav-authors': {
-    list: 'fav', kind: 'authors', title: '收藏的作者', unit: '位', count: '#mine-favauthors-count',
+    list: 'fav', kind: 'authors', title: '收藏的作者', short: '收藏作者', unit: '位',
     placeholder: '输入要收藏的作者', tip: '点一下取消收藏。搜索时这些作者的本子排在前面，「动态」里能看到他们的新本。',
     empty: '还没有收藏作者。在搜索结果里点「收藏」，可以收藏这本的作者。',
+  },
+  'fav-dislikes': {
+    list: 'fav', kind: 'dislikes', title: '反感的标签', short: '反感标签', unit: '个',
+    placeholder: '输入反感的标签',
+    tip: '点一下取消反感。反感不是拉黑：带这些标签的本子照样显示，只是搜索时往后排（每个反感标签抵掉一个收藏标签）。',
+    empty: '还没有反感的标签。反感不是拉黑：带这些标签的本子照样显示，只是搜索时往后排。在搜索结果里点「收藏」，标签点两下就是反感。',
   },
 };
 const namesOf = (key) => ({
   'black-tags': blacklistTags, 'black-authors': blacklistAuthors,
-  'fav-tags': favTags, 'fav-authors': favAuthors,
+  'fav-tags': favTags, 'fav-authors': favAuthors, 'fav-dislikes': dislikeTags,
 })[key];
 
+// 「我的」里那一行的摘要：收藏、反感、拉黑各多少
 function updateNameCounts() {
-  for (const [key, cfg] of Object.entries(NAME_LISTS)) {
-    const n = namesOf(key).length;
-    const el = $(cfg.count);
-    if (el) el.textContent = n ? `${n} ${cfg.unit}` : '空';
+  const el = $('#mine-prefs-count');
+  if (!el) return;
+  const fav = favTags.length + favAuthors.length;
+  const black = blockedIds.size + blacklistTags.length + blacklistAuthors.length;
+  const parts = [];
+  if (fav) parts.push(`收藏 ${fav}`);
+  if (dislikeTags.length) parts.push(`反感 ${dislikeTags.length}`);
+  if (black) parts.push(`拉黑 ${black}`);
+  el.textContent = parts.join(' · ') || '收藏 · 反感 · 拉黑';
+}
+
+// 喜好管理顶上的一排切换
+const PREF_TABS = [
+  ['fav-tags'], ['fav-authors'], ['fav-dislikes'], ['black-tags'], ['black-authors'], ['black-books', '拉黑本子'],
+];
+function prefTabs(active) {
+  const row = document.createElement('div');
+  row.className = 'chips scroll pref-tabs';
+  for (const [key, label] of PREF_TABS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (key === active ? ' active' : '');
+    const n = key === 'black-books' ? blockedIds.size : namesOf(key).length;
+    chip.textContent = (label || NAME_LISTS[key].short) + (n ? ` ${n}` : '');
+    chip.onclick = () => {
+      if (key === active) return;
+      localStorage.setItem('jm-pref-tab', key);
+      if (key === 'black-books') openBlacklistSheet(); else openNameSheet(key);
+    };
+    row.appendChild(chip);
   }
+  requestAnimationFrame(() => {
+    const on = row.querySelector('.active');
+    if (on) on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  });
+  return row;
+}
+
+// 打开喜好管理：回到上次看的那一页
+function openPrefsSheet() {
+  const key = localStorage.getItem('jm-pref-tab') || 'fav-tags';
+  if (key === 'black-books') openBlacklistSheet(); else openNameSheet(NAME_LISTS[key] ? key : 'fav-tags');
 }
 
 async function openNameSheet(key) {
@@ -492,9 +667,10 @@ async function openNameSheet(key) {
   await Promise.all([loadBlacklist(), loadFavorites()]);
   const names = namesOf(key);
   updateNameCounts();
-  $('#sheet-title').textContent = `${cfg.title}（${names.length}）`;
+  $('#sheet-title').textContent = '喜好管理';
   const body = $('#sheet-body');
   body.innerHTML = '';
+  body.appendChild(prefTabs(key));
 
   const row = document.createElement('div');
   row.className = 'input-row';
@@ -520,7 +696,7 @@ async function openNameSheet(key) {
 
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = names.length ? cfg.tip : cfg.empty;
+  tip.textContent = names.length ? `${cfg.title} ${names.length} ${cfg.unit}。${cfg.tip}` : cfg.empty;
   body.appendChild(tip);
 
   if (names.length) {
@@ -531,7 +707,7 @@ async function openNameSheet(key) {
       chip.className = 'tagchip';
       chip.innerHTML = '<span></span>' + svg('close', 14);
       chip.querySelector('span').textContent = name;
-      chip.title = cfg.list === 'black' ? '移出黑名单' : '取消收藏';
+      chip.title = cfg.list === 'black' ? '移出黑名单' : cfg.kind === 'dislikes' ? '取消反感' : '取消收藏';
       chip.onclick = async () => {
         await setNames(cfg.list, cfg.kind, [], [name]);
         openNameSheet(key);

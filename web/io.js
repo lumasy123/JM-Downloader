@@ -20,17 +20,59 @@ async function copyText(text) {
   }
 }
 
-// ids 为空导出整个书架；多选时只导出选中的
+/* ---- 「我的」→ 导出 / 导入：一个弹层，顶上切换导出、导入，再挑要哪些内容 ---- */
+function transferTabs(active) {
+  const row = document.createElement('div');
+  row.className = 'chips pref-tabs';
+  for (const [key, label, open] of [['export', '导出', () => exportJmList(null)], ['import', '导入', openListImportSheet]]) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (key === active ? ' active' : '');
+    chip.textContent = label;
+    chip.onclick = () => { if (key !== active) open(); };
+    row.appendChild(chip);
+  }
+  return row;
+}
+const openTransferSheet = () => exportJmList(null);
+
+// 完整备份那一块：号单只有 JM 号和名单，备份文件还带分组、阅读进度、评分、笔记、书签
+function backupBlock(isExport) {
+  const box = document.createElement('div');
+  box.className = 'backup-block';
+  const h = document.createElement('p');
+  h.className = 'pick-title';
+  h.textContent = isExport ? '完整备份（文件）' : '从备份文件恢复';
+  const tip = document.createElement('p');
+  tip.className = 'hint';
+  tip.textContent = isExport
+    ? '除了上面这些，还带分组、阅读进度、评分、笔记、书签，存成一个 .json 文件；换设备或重装后用「导入」恢复。'
+    : '选之前「导出」的 .json 备份文件，分组、阅读进度、评分、笔记、书签都会合并回来，不会覆盖已有的。';
+  const btn = document.createElement('button');
+  btn.className = 'ghost wide';
+  btn.textContent = isExport ? '导出备份文件' : '选择备份文件';
+  btn.onclick = () => (isExport ? exportBackup() : $('#backup-file').click());
+  box.append(h, tip, btn);
+  return box;
+}
+
+// ids 为空：「我的」里的导出，整个书架和名单；多选时只导出选中的书
 // 导出号单：先勾要导出的内容，再选「复制文字」（换设备最方便）或「分享 / 保存文件」
 function exportJmList(ids) {
-  $('#sheet-title').textContent = ids ? `导出选中的 ${ids.length} 本` : '导出号单';
+  $('#sheet-title').textContent = ids ? `导出选中的 ${ids.length} 本` : '导出 / 导入';
   const body = $('#sheet-body');
   body.innerHTML = '';
+  if (!ids) {
+    body.appendChild(transferTabs('export'));
+    const h = document.createElement('p');
+    h.className = 'pick-title';
+    h.textContent = '号单（文字，可复制）';
+    body.appendChild(h);
+  }
 
   const parts = [
     ['shelf', ids ? '选中的书（JM 号）' : '书架（JM 号）', true],
     ['black', '黑名单（本子 · 标签 · 作者）', !ids],
-    ['fav', '收藏名单（标签 · 作者）', !ids],
+    ['fav', '喜好（收藏的标签 · 作者，反感的标签）', !ids],
   ];
   const boxes = document.createElement('div');
   boxes.className = 'pickchips';
@@ -46,7 +88,7 @@ function exportJmList(ids) {
 
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = '「复制文字」直接复制到剪贴板，发到另一台设备后，在那边「导入号单」里粘贴就行。';
+  tip.textContent = '「复制文字」直接复制到剪贴板，发到另一台设备后，在那边「导出 / 导入」→「导入」里粘贴就行。';
   body.appendChild(tip);
 
   const chosen = () => $$('#sheet-body .pickchip.on').map((c) => c.dataset.part);
@@ -88,6 +130,7 @@ function exportJmList(ids) {
   };
   row.append(file, copy);
   body.appendChild(row);
+  if (!ids) body.appendChild(backupBlock(true));
   $('#sheet').classList.remove('hidden');
 }
 
@@ -95,7 +138,7 @@ function exportJmList(ids) {
 const LIST_SECTIONS = {
   书架: 'shelf',
   '黑名单·本子': 'black-books', '黑名单·标签': 'black-tags', '黑名单·作者': 'black-authors',
-  '收藏·标签': 'fav-tags', '收藏·作者': 'fav-authors',
+  '收藏·标签': 'fav-tags', '收藏·作者': 'fav-authors', '反感·标签': 'fav-dislikes',
 };
 function parseImport(text) {
   const chunks = { shelf: [] };
@@ -128,6 +171,7 @@ function parseImport(text) {
       'black-authors': lines('black-authors'),
       'fav-tags': lines('fav-tags'),
       'fav-authors': lines('fav-authors'),
+      'fav-dislikes': lines('fav-dislikes'),
     },
   };
 }
@@ -176,11 +220,16 @@ function parseJmList(text) {
 }
 
 function openListImportSheet() {
-  $('#sheet-title').textContent = '导入号单';
+  $('#sheet-title').textContent = '导出 / 导入';
   const body = $('#sheet-body');
   body.innerHTML = '';
+  body.appendChild(transferTabs('import'));
+  const h = document.createElement('p');
+  h.className = 'pick-title';
+  h.textContent = '号单（粘贴文字或选文件）';
+  body.appendChild(h);
   const ta = document.createElement('textarea');
-  ta.placeholder = '把另一台设备「复制文字」得到的号单粘贴到这里，\n也可以直接选一个号单文件。\n书、黑名单、收藏名单都会先给你预览，挑着导入';
+  ta.placeholder = '把另一台设备「复制文字」得到的号单粘贴到这里，\n也可以直接选一个号单文件。\n书、黑名单、喜好名单都会先给你预览，挑着导入';
   body.appendChild(ta);
 
   const row = document.createElement('div');
@@ -195,6 +244,7 @@ function openListImportSheet() {
   go.onclick = () => showImportList(ta.value);
   row.append(pick, go);
   body.appendChild(row);
+  body.appendChild(backupBlock(false));
   $('#sheet').classList.remove('hidden');
 }
 
@@ -221,7 +271,7 @@ const importNamePick = new Set();   // 选中要导入的名单项：「分组|�
 
 const IMPORT_NAME_TITLES = {
   'black-books': '黑名单 · 本子', 'black-tags': '黑名单 · 标签', 'black-authors': '黑名单 · 作者',
-  'fav-tags': '收藏 · 标签', 'fav-authors': '收藏 · 作者',
+  'fav-tags': '收藏 · 标签', 'fav-authors': '收藏 · 作者', 'fav-dislikes': '反感 · 标签',
 };
 // 这一项本机是不是已经有了
 function nameHad(key, v) {
@@ -229,6 +279,7 @@ function nameHad(key, v) {
   if (key === 'black-tags') return blockedTagSet.has(normTag(v));
   if (key === 'black-authors') return blockedAuthorSet.has(normTag(v));
   if (key === 'fav-tags') return favTagSet.has(normTag(v));
+  if (key === 'fav-dislikes') return dislikeTagSet.has(normTag(v));
   return favAuthorSet.has(normTag(v));
 }
 const nameKey = (key, v) => key + '|' + (key === 'black-books' ? v.id : v);
@@ -273,7 +324,7 @@ async function importPickedNames() {
   const pick = (key) => (importNames[key] || []).filter((v) => importNamePick.has(nameKey(key, v)));
   for (const [key, list, kind] of [
     ['black-tags', 'black', 'tags'], ['black-authors', 'black', 'authors'],
-    ['fav-tags', 'fav', 'tags'], ['fav-authors', 'fav', 'authors'],
+    ['fav-tags', 'fav', 'tags'], ['fav-authors', 'fav', 'authors'], ['fav-dislikes', 'fav', 'dislikes'],
   ]) {
     const add = pick(key);
     if (add.length) await setNames(list, kind, add);
@@ -424,8 +475,6 @@ $('#imp-download').onclick = async () => {
   renderImportList();
 };
 
-$('#mine-list-export').onclick = () => exportJmList(null);
-$('#mine-list-import').onclick = openListImportSheet;
 $('#list-file').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';

@@ -13,7 +13,7 @@
 
   let allow = new Set();
   function buildAllow() {
-    const custom = (pref('jm-mask-allow') || '').split(/[\s,，、;；]+/).filter(Boolean);
+    const custom = (pref('jm-mask-allow') || '').split(/\s+/).filter(Boolean);
     allow = new Set([...DEFAULT_ALLOW, ...custom].map((t) => t.toLowerCase()));
   }
   function allowed(el) {

@@ -61,6 +61,7 @@
   <div class="panel">
     <div class="input-row">
       <input id="search-input" type="search" placeholder="搜索标题 / 作者 / 标签，或输入 JM 号">
+      <button id="search-mode" class="mode-toggle" data-search-mode></button>
       <button id="btn-search" class="ghost">搜索</button>
     </div>
     <p class="hint">纯数字按 JM 号直接下载；多个关键字用空格隔开，词前加 - 表示排除，例如：校服 -NTR</p>
@@ -69,11 +70,6 @@
       <button class="chip" data-kind="work">标题</button>
       <button class="chip" data-kind="author">作者</button>
       <button class="chip" data-kind="tag">标签</button>
-    </div>
-    <div class="chips mode-row" id="search-mode">
-      <span class="mode-label">多个关键字</span>
-      <button class="chip" data-mode="and">同时包含</button>
-      <button class="chip" data-mode="or">包含其一</button>
     </div>
     <button id="btn-explore" class="explore-btn" type="button">探索：按收藏标签挑 15 本没看过的</button>
     <label class="blk-toggle">
@@ -132,29 +128,9 @@
       <span class="value">下载 · 阅读 · 外观</span>
       <span class="arrow">›</span>
     </button>
-    <button class="menu-item" id="mine-blacklist">
-      <span class="label">本子黑名单</span>
-      <span class="value" id="mine-blacklist-count"></span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-tagblack">
-      <span class="label">标签黑名单</span>
-      <span class="value" id="mine-tagblack-count"></span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-authorblack">
-      <span class="label">作者黑名单</span>
-      <span class="value" id="mine-authorblack-count"></span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-favtags">
-      <span class="label">收藏的标签</span>
-      <span class="value" id="mine-favtags-count"></span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-favauthors">
-      <span class="label">收藏的作者</span>
-      <span class="value" id="mine-favauthors-count"></span>
+    <button class="menu-item" id="mine-prefs">
+      <span class="label">喜好管理</span>
+      <span class="value" id="mine-prefs-count">收藏 · 反感 · 拉黑</span>
       <span class="arrow">›</span>
     </button>
     <button class="menu-item" id="mine-stats">
@@ -167,23 +143,9 @@
       <span class="value" id="mine-storage-size"></span>
       <span class="arrow">›</span>
     </button>
-    <button class="menu-item" id="mine-list-export">
-      <span class="label">导出号单</span>
-      <span class="value">书 · 黑名单 · 收藏，可复制文字</span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-list-import">
-      <span class="label">导入号单</span>
-      <span class="value">粘贴文字或选文件</span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-export">
-      <span class="label">导出备份</span>
-      <span class="value">分组 · 黑名单 · 阅读进度</span>
-      <span class="arrow">›</span>
-    </button>
-    <button class="menu-item" id="mine-import">
-      <span class="label">导入备份</span>
+    <button class="menu-item" id="mine-transfer">
+      <span class="label">导出 / 导入</span>
+      <span class="value">号单 · 名单 · 完整备份</span>
       <span class="arrow">›</span>
     </button>
   </div>
@@ -325,7 +287,7 @@
     <h2 class="section-title">隐私</h2>
     <div class="menu">
       <label class="menu-item setting stack">
-        <span class="label">遮挡时保留的标签<small>点顶栏的眼睛按钮一键遮挡：封面盖上纯色，标签除了中文、汉化、全彩、同人这类说明性质的，其余全部盖住。这里可以再加几个不想遮的标签，用空格或逗号隔开</small></span>
+        <span class="label">遮挡时保留的标签<small>点顶栏的眼睛按钮一键遮挡：封面盖上纯色，标签除了中文、汉化、全彩、同人这类说明性质的，其余全部盖住。这里可以再加几个不想遮的标签，多个标签用空格隔开</small></span>
         <input data-pref="jm-mask-allow" type="text" placeholder="例如 校服 双马尾" autocomplete="off">
       </label>
       <label class="menu-item setting">
