@@ -39,7 +39,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_FILE = 1
-        private const val REQ_NOTIFY = 2
 
         // Python 服务跑在进程里。下载服务让进程活着时，Activity 可能被系统
         // 回收再重建，这时不能再起一份服务（端口已被占用）
@@ -50,7 +49,6 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var splash: TextView
     private var fileCallback: ValueCallback<Array<Uri>>? = null
-    private var askedNotify = false
 
     // 只在阅读器里、且设置里开着时才拦音量键，其他页面音量键照常调音量
     @Volatile private var volumeKeys = false
@@ -224,20 +222,17 @@ class MainActivity : Activity() {
             return if (toLandscape) "landscape" else "portrait"
         }
 
-        /** 网页一发现有下载任务就会调这里，挂上前台服务保活。 */
+        /**
+         * 网页一发现有下载任务就会调这里，挂上前台服务保活，切到后台也能接着下。
+         *
+         * 这个 App 不发任何通知栏消息：安卓 13 起没有通知权限时，前台服务的通知不会显示，
+         * 所以只在 13 及以上挂服务；更早的系统上前台服务必定带一条通知，干脆不挂，
+         * 代价是切到后台久了下载可能被系统暂停，回到 App 会接着下。
+         */
         @JavascriptInterface
         fun startDownloadService() {
-            runOnUiThread {
-                // 安卓 13 起通知要单独授权；不给也能下，只是看不到进度通知
-                if (Build.VERSION.SDK_INT >= 33 && !askedNotify &&
-                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-                    PackageManager.PERMISSION_GRANTED
-                ) {
-                    askedNotify = true
-                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
-                }
-                DownloadService.start(this@MainActivity)
-            }
+            if (Build.VERSION.SDK_INT < 33) return
+            runOnUiThread { DownloadService.start(this@MainActivity) }
         }
 
         /**

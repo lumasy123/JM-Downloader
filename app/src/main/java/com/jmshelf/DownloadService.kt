@@ -34,7 +34,6 @@ class DownloadService : Service() {
         private const val CHANNEL_PROGRESS = "download_progress"
         private const val CHANNEL_DONE = "download_done"
         private const val ID_PROGRESS = 1
-        private const val ID_DONE = 2
 
         fun start(context: Context) {
             val intent = Intent(context, DownloadService::class.java)
@@ -148,11 +147,7 @@ class DownloadService : Service() {
     /** 调用方需持有 lock。 */
     private fun finish(seen: Set<String>, status: Map<String, String>, names: Map<String, String>) {
         worker = null
-        val ok = seen.filter { status[it] == "done" }
-        val bad = seen.count { status[it] == "error" }
-        if (ok.isNotEmpty() || bad > 0) {
-            notify(ID_DONE, doneNotification(ok.size, bad, ok.firstOrNull()?.let { names[it] }))
-        }
+        // 不发「下载完成」通知：这个 App 不在通知栏留任何消息，下完由 App 里的提示告诉你
         releaseWakeLock()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         // 只在没有更新的启动请求时才真正停掉，避免刚好撞上新下载
@@ -200,22 +195,6 @@ class DownloadService : Service() {
             }
             .build()
 
-    private fun doneNotification(ok: Int, bad: Int, firstName: String?): Notification {
-        val text = when {
-            ok == 1 && bad == 0 && firstName != null -> "《$firstName》已下载完成"
-            bad == 0 -> "$ok 本漫画已下载完成"
-            ok == 0 -> "$bad 本下载失败，打开任务页可以重试"
-            else -> "$ok 本完成，$bad 本失败"
-        }
-        return NotificationCompat.Builder(this, CHANNEL_DONE)
-            .setSmallIcon(R.drawable.ic_stat_download)
-            .setContentTitle("下载结束")
-            .setContentText(text)
-            .setAutoCancel(true)
-            .setContentIntent(openAppIntent())
-            .build()
-    }
-
     private fun notify(id: Int, n: Notification) {
         try {
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(id, n)
@@ -229,7 +208,6 @@ class DownloadService : Service() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_PROGRESS, "下载进度", NotificationManager.IMPORTANCE_LOW))
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_DONE, "下载完成", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.deleteNotificationChannel(CHANNEL_DONE)   // 旧版本建过「下载完成」渠道，清掉
     }
 }
