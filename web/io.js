@@ -112,7 +112,7 @@ function exportJmList(ids) {
   };
   const file = document.createElement('button');
   file.className = 'ghost';
-  file.textContent = hasNative('shareFile') ? '分享文件' : '保存文件';
+  file.textContent = hasNative('shareFile') && !isDesktop() ? '分享文件' : '保存文件';
   file.onclick = async () => {
     const res = await build(true);
     if (!res) return;

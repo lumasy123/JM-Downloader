@@ -57,7 +57,7 @@ def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text("utf-8")))
+            cfg.update(json.loads(CONFIG_PATH.read_text("utf-8-sig")))   # 用记事本改过的会带 BOM
         except Exception as e:
             print(f"config.json 读取失败，使用默认配置：{e}")
     else:
@@ -72,7 +72,8 @@ if os.environ.get("JM_PORT"):
     CONFIG["port"] = int(os.environ["JM_PORT"])
 
 _dl = os.environ.get("JM_DOWNLOAD_DIR") or CONFIG["download_dir"]
-DOWNLOAD_DIR = Path(_dl) if Path(_dl).is_absolute() else (ROOT / _dl)
+# 相对路径按 config.json 所在目录算（桌面端的配置在用户目录里，程序本身装在别处）
+DOWNLOAD_DIR = Path(_dl) if Path(_dl).is_absolute() else (CONFIG_PATH.parent / _dl)
 DOWNLOAD_DIR = DOWNLOAD_DIR.resolve()
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 

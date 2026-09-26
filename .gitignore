@@ -26,3 +26,8 @@ __pycache__/
 
 # 生图记录（含本机路径、接口地址），提示词已在 pet_src/prompts/
 pet_src/generated/*.meta.json
+
+# 桌面端打包产物（python desktop/build.py）
+build/
+dist/
+desktop/icon.ico

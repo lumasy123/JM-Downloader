@@ -102,6 +102,33 @@ function applyPrivacy() {
 }
 
 // 安卓 App 里才有 AndroidApp 这些原生接口；网页版里安静地跳过
+// 电脑桌面端（pywebview）：它的接口准备好后，包成和安卓一样的 window.AndroidApp。
+// 只接「分享文件」（电脑上是另存为）和「横屏」（电脑上是全屏）；复制、调暗、深色模式这些走网页版的做法
+window.addEventListener('pywebviewready', () => {
+  const api = window.pywebview.api;
+  document.body.classList.add('desktop');
+  window.AndroidApp = {
+    shareFile: (path) => { api.save_file(path); return true; },
+    toggleOrientation: () => { api.toggle_fullscreen(); return ''; },
+  };
+  // 设置里的「存储位置」：只有电脑版有
+  const showDir = () => api.get_data_location().then((p) => { $('#data-dir').textContent = p; });
+  showDir();
+  $('#data-open').onclick = () => api.open_data_folder();
+  $('#data-move').onclick = async () => {
+    if (!await confirmDialog({
+      title: '更改存储位置？',
+      message: '接下来选一个文件夹，书、封面、收藏、评分等数据会整个搬过去（书多的话要等一会儿），搬完自动重启。\n如果选的文件夹里已经有 JM下载器 的数据，会直接切换过去用那边的。',
+      ok: '选择文件夹',
+    })) return;
+    toast('选好文件夹后开始搬，请稍候……');
+    const res = await api.change_data_location();
+    if (res.status === 'ok') toast(`已换到 ${res.path}，马上重启`);
+    else if (res.status === 'error') toast(res.message);
+  };
+});
+const isDesktop = () => !!window.pywebview;
+
 const hasNative = (name) =>
   !!(window.AndroidApp && typeof window.AndroidApp[name] === 'function');
 function native(name, ...args) {

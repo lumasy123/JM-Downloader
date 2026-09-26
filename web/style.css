@@ -2294,3 +2294,7 @@ body.masked .mw-all::after { transform: none; }
 
 /* 作者菜单里的拉黑一行用红色 */
 .share-item.danger, .share-item.danger > svg { color: #e05656; }
+
+/* 只有电脑版显示的设置（存储位置） */
+body:not(.desktop) .desktop-only { display: none; }
+#data-dir { word-break: break-all; }

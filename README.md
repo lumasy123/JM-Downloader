@@ -4,6 +4,9 @@
 
 **安卓安装包**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载最新的 `.apk`，装上就能用，不需要电脑。
 
+**Windows 电脑版**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载 `JM下载器-安装包-x.x.x.exe`，
+双击安装（默认装到当前用户，不需要管理员权限），开始菜单 / 桌面上就有「JM下载器」，功能和安卓版一样。
+
 - 书架：列表 / 封面墙，分组、多标准评分（按平均分排序、筛选）、每本可写笔记、记点开次数
 - 下载：输入 JM 号（可多个）或关键字搜索，带实时进度；搜索结果按收藏的标签、作者排序；
   「探索」按收藏标签一次挑 15 本没下过的，可以换一批
@@ -44,6 +47,25 @@
 以后每次用：打开 Termux → `cd ~/storage/shared/jmshelf && python server.py` → 点桌面图标。
 
 ---
+
+## 电脑版（Windows 桌面端）
+
+和安卓版一个思路：程序在后台跑同一份 `server.py`，前面用系统自带的 Edge 内核（WebView2）开一个独立窗口。
+
+- **数据位置**：书、封面、收藏、评分等默认放在 `%APPDATA%\JM下载器`，设置 →「存储位置」可以打开文件夹，
+  或者换到别的盘（会整个搬过去并自动重启）。卸载程序不会删这些数据。
+- **和安卓版的区别**：「分享」在电脑上是「另存为」，阅读器的「横屏」按钮是全屏；其余完全一样。
+- **换设备**：两边都用 我的 →「导出 / 导入」→ 完整备份（书本身需要重新下载，或者直接把数据文件夹拷过去）。
+
+自己打包安装包：
+
+```bash
+pip install pyinstaller pywebview
+winget install JRSoftware.InnoSetup
+python desktop/build.py          # 输出 dist/JM下载器-安装包-<版本>.exe
+```
+
+打出来的安装包只含程序，不含任何个人数据（打包脚本会检查）。直接跑源码调试：`python desktop/app.py`。
 
 ## 配置
 
