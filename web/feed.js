@@ -220,7 +220,7 @@ function feedRow(item, part) {
       await api.post('/api/feed/dismiss', { id: item.id });
       row.remove();
       Object.values(feedData).forEach((d) => { d.items = d.items.filter((x) => x.id !== item.id); });
-      snackbar('不再显示这本', '拉黑作者 / 标签', () => openPickSheet('black', item), 6000);
+      snackbar('不再显示这本', '拉黑作者 / 标签', () => openActionSheet(item), 6000);
     };
     acts.appendChild(nope);
   }

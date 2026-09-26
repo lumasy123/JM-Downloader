@@ -965,7 +965,7 @@ async function openDetail(id, push = true) {
     <div class="actions">
       <button class="primary" id="btn-read"></button>
       <button class="ghost hidden" id="btn-resume">继续下载</button>
-      <button class="ghost icon-only" id="btn-space" title="压缩 / 导出" aria-label="压缩 / 导出">${svg('box', 20)}</button>
+      <button class="ghost icon-only" id="btn-space" title="分享" aria-label="分享">${svg('share', 20)}</button>
       <button class="ghost icon-only" id="btn-group" title="移动到分组" aria-label="移动到分组">${svg('folder', 20)}</button>
       <button class="ghost icon-only" id="btn-delete" title="删除这本" aria-label="删除这本">${svg('trash', 20)}</button>
     </div>
@@ -1014,10 +1014,10 @@ async function openDetail(id, push = true) {
   if (tagBox.children.length) {
     const fav = document.createElement('button');
     fav.className = 'tag tag-fav-btn';
-    fav.innerHTML = svg('heart', 12) + '<span>收藏标签</span>';
-    fav.onclick = () => openPickSheet('fav', {
+    fav.innerHTML = svg('heart', 12) + '<span>收藏 / 反感</span>';
+    fav.onclick = () => openActionSheet({
       id: data.id, name: data.name, author: data.author, tags: data.tags || [],
-    });
+    }, { noBook: true });
     tagBox.appendChild(fav);
   } else {
     tagBox.remove();
@@ -1035,7 +1035,7 @@ async function openDetail(id, push = true) {
   $('#btn-read').textContent = saved ? `继续阅读 (第 ${saved + 1} 页)` : '开始阅读';
   $('#btn-read').onclick = () => openReader(data.id, saved || 0);
   $('#btn-group').onclick = () => openGroupSheet(data.id, group);
-  $('#btn-space').onclick = () => openSpaceSheet(book || { id: data.id, name: data.name });
+  $('#btn-space').onclick = () => openShareSheet(book || { id: data.id, name: data.name, author: data.author });
   $('#btn-delete').onclick = () => removeAlbum(data.id, data.name);
 
   // 书签：点一下直接跳到那一页
@@ -2122,16 +2122,13 @@ function makeCard(item) {
       <div class="name"></div>
       <div class="author"></div>
       <div class="tags"></div>
-      <button class="dl">下载</button>
-      <div class="acts">
-        <button class="${blocked ? 'unblock' : 'block'}">${blocked ? '解除拉黑' : '拉黑'}</button>
-        <button class="favbtn">收藏</button>
+      <div class="dlrow">
+        <button class="dl">下载</button>
+        <button class="opsbtn">操作</button>
       </div>
     </div>`;
-  // 已拉黑的一点就解除；没拉黑的弹窗挑要拉黑什么（这一本 / 作者 / 标签）
-  card.querySelector('.block, .unblock').onclick = () =>
-    (blockedIds.has(item.id) ? toggleBlock(item) : openPickSheet('black', item));
-  card.querySelector('.favbtn').onclick = () => openPickSheet('fav', item);
+  // 「操作」：标签设成收藏 / 反感 / 拉黑，作者收藏 / 拉黑，这一本拉黑，都在一个弹窗里
+  card.querySelector('.opsbtn').onclick = () => openActionSheet(item);
 
   const img = card.querySelector('img');
   img.src = item.cover;
@@ -2424,7 +2421,10 @@ function renderHistory() {
     localStorage.removeItem('jm-search-history');
     renderHistory();
   });
-  section('常用标签', tags.map((t) => ({ q: t, kind: 'tag' })), null);
+  section('常用标签', tags.map((t) => ({ q: t, kind: 'tag' })), () => {
+    localStorage.removeItem('jm-tag-counts');
+    renderHistory();
+  });
 }
 
 // 要显示哪些页码：首页、尾页、当前页前后各两页，中间断开的用 … 表示。
@@ -2520,7 +2520,7 @@ function formatSize(bytes) {
 
 /* ------------------------------------------------------------ 存储空间 */
 /* ---- 单本的后台活：压缩画质、导出 ZIP / PDF ---- */
-const JOB_NAMES = { compress: '压缩画质', zip: '导出 ZIP', pdf: '导出 PDF' };
+const JOB_NAMES = { compress: '压缩画质', zip: '打包 ZIP', pdf: '导出 PDF', cover: '导出封面' };
 
 async function runJob(id, kind, onProgress) {
   let job = await api.post('/api/album/job', { id, kind });
@@ -2546,44 +2546,71 @@ function deliverFile(job) {
   toast(`已导出 ${job.name}`);
 }
 
-async function openSpaceSheet(book) {
-  $('#sheet-title').textContent = '空间';
+// 分享文字：安卓弹系统分享，网页版复制到剪贴板
+async function shareText(text) {
+  if (hasNative('shareText') && native('shareText', text)) return;
+  toast((await copyText(text)) ? '已复制，可以直接粘贴发出去' : '复制失败');
+}
+
+// 详情页的「分享」：JM 号、PDF、每页一张图的 ZIP、封面；最下面是压缩画质（原来的「空间」）
+function openShareSheet(book) {
+  $('#sheet-title').textContent = '分享';
   const body = $('#sheet-body');
   body.innerHTML = '';
-  const tip = document.createElement('p');
-  tip.className = 'hint';
-  tip.textContent = '压缩画质：每页缩到最宽 1200 像素、重新压一遍，一般能省一半左右，手机上看不太出来；'
-    + '只换真变小了的图，原图不保留。导出的 ZIP / PDF 可以存到别处，再从书架删掉省空间。';
-  body.appendChild(tip);
   const status = document.createElement('p');
   status.className = 'hint center';
-  const row = document.createElement('div');
-  row.className = 'sheet-actions';
-  for (const kind of ['compress', 'zip', 'pdf']) {
-    const b = document.createElement('button');
-    b.className = kind === 'compress' ? 'primary' : 'ghost';
-    b.textContent = JOB_NAMES[kind];
-    b.onclick = async () => {
-      if (kind === 'compress' && !await confirmDialog({
-        title: '压缩这本的画质？', message: '原图不保留，压完不能恢复。', ok: '压缩',
-      })) return;
-      row.querySelectorAll('button').forEach((x) => { x.disabled = true; });
-      const job = await runJob(book.id, kind, (j) => {
-        status.textContent = `${JOB_NAMES[kind]}中… ${j.done}/${j.total || '?'} 页`;
-      });
-      row.querySelectorAll('button').forEach((x) => { x.disabled = false; });
-      if (!job) { status.textContent = ''; return; }
-      if (kind === 'compress') {
-        status.textContent = `压好了，省下 ${formatSize(job.freed)}`;
-        toast(`省下 ${formatSize(job.freed)}`);
-      } else {
-        status.textContent = `导出好了：${job.name}`;
-        deliverFile(job);
-      }
-    };
-    row.appendChild(b);
-  }
-  body.append(row, status);
+  const rows = [];
+  const addRow = (icon, title, sub, onClick) => {
+    const row = document.createElement('button');
+    row.className = 'share-item';
+    row.innerHTML = `${svg(icon, 20)}<span class="name"></span><span class="arrow">›</span>`;
+    const name = row.querySelector('.name');
+    name.textContent = title;
+    const s = document.createElement('small');
+    s.textContent = sub;
+    name.appendChild(s);
+    row.onclick = onClick;
+    rows.push(row);
+    body.appendChild(row);
+  };
+  const busy = (on) => rows.forEach((r) => { r.disabled = on; });
+  const job = async (kind) => {
+    busy(true);
+    const j = await runJob(book.id, kind, (x) => {
+      status.textContent = `${JOB_NAMES[kind]}中… ${x.done}/${x.total || '?'} 页`;
+    });
+    busy(false);
+    if (!j) { status.textContent = ''; return null; }
+    return j;
+  };
+  const deliver = (kind) => async () => {
+    const j = await job(kind);
+    if (!j) return;
+    status.textContent = `好了：${j.name}`;
+    deliverFile(j);
+  };
+
+  addRow('share', '分享 JM 号', '标题和 JM 号，对方搜这个号就能下', () => {
+    shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
+  });
+  addRow('book', '导出 PDF', '整本合成一个 PDF，电脑、平板直接能看', deliver('pdf'));
+  addRow('box', '打包 ZIP', '每页一张原图，打成一个压缩包', deliver('zip'));
+  addRow('grid', '分享封面', '只发封面那一张图', deliver('cover'));
+
+  const h = document.createElement('p');
+  h.className = 'pick-title';
+  h.textContent = '省空间';
+  body.appendChild(h);
+  addRow('fit', '压缩画质', '每页缩到最宽 1200 像素重新压，一般能省一半，原图不保留', async () => {
+    if (!await confirmDialog({
+      title: '压缩这本的画质？', message: '原图不保留，压完不能恢复。', ok: '压缩',
+    })) return;
+    const j = await job('compress');
+    if (!j) return;
+    status.textContent = `压好了，省下 ${formatSize(j.freed)}`;
+    toast(`省下 ${formatSize(j.freed)}`);
+  });
+  body.appendChild(status);
   $('#sheet').classList.remove('hidden');
 }
 
@@ -2640,7 +2667,7 @@ async function openStorageSheet() {
       const book = shelfItems.find((x) => x.id === b.id);
       addRow(b.name, `${formatSize(b.size)} · ${timeAgo(lastRead(b.id))}看完`
         + (book.rating != null ? ` · ★ ${book.rating.toFixed(1)}` : ''),
-      iconButton('box', '压缩或导出', 'del'), () => { closeSheet(); openSpaceSheet(book); });
+      iconButton('box', '压缩或导出', 'del'), () => { closeSheet(); openShareSheet(book); });
     }
     const h2 = document.createElement('p');
     h2.className = 'pick-title';

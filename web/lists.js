@@ -512,12 +512,25 @@ function markDetailTags() {
   $$('.detail-tags .tag').forEach(markTagClass);
 }
 
-/* ---- 搜索卡片上的「拉黑」「收藏」：弹窗里勾这本的作者、标签（拉黑还能勾这一本）。
- * 收藏弹窗里的标签点一下收藏、再点一下改成反感、再点取消 ---- */
-const TAG_STATES = ['', 'on', 'dis'];
-async function openPickSheet(list, item) {
-  const black = list === 'black';
-  let tags = item.tags || null;
+/* ---- 「操作」弹窗：这本的标签设成收藏 / 反感 / 拉黑，作者收藏 / 拉黑，这一本拉黑 ----
+ * 每一行右边一组按钮，点亮的就是现在的状态，再点一下取消；最后「保存」一次改完 */
+const TAG_STATES = {
+  fav: { label: '收藏', list: 'fav', kind: 'tags' },
+  dis: { label: '反感', list: 'fav', kind: 'dislikes' },
+  black: { label: '拉黑', list: 'black', kind: 'tags' },
+};
+const AUTHOR_STATES = {
+  fav: { label: '收藏', list: 'fav', kind: 'authors' },
+  black: { label: '拉黑', list: 'black', kind: 'authors' },
+};
+const tagStateOf = (t) => {
+  const k = normTag(t);
+  return favTagSet.has(k) ? 'fav' : dislikeTagSet.has(k) ? 'dis' : blockedTagSet.has(k) ? 'black' : '';
+};
+const authorStateOf = (a) => (hasAuthor(favAuthorSet, a) ? 'fav' : hasAuthor(blockedAuthorSet, a) ? 'black' : '');
+
+async function openActionSheet(item, opts = {}) {
+  let tags = item.tags && item.tags.length ? item.tags : null;
   const card = $$('.card').find((c) => c.dataset.id === item.id);
   if (!tags && card && card.dataset.tags) {
     try { tags = JSON.parse(card.dataset.tags); } catch (_) {}
@@ -527,101 +540,103 @@ async function openPickSheet(list, item) {
     const info = await api.get('/api/info?id=' + encodeURIComponent(item.id)).catch(() => ({}));
     tags = info.tags || [];
   }
-  const tagSet = black ? blockedTagSet : favTagSet;
-  const authorSet = black ? blockedAuthorSet : favAuthorSet;
+  await Promise.all([loadBlacklist(), loadFavorites()]);
 
-  $('#sheet-title').textContent = black ? '拉黑' : '收藏';
+  $('#sheet-title').textContent = '操作';
   const body = $('#sheet-body');
   body.innerHTML = '';
-  const picks = [];   // { kind, name, was, chip }；was / 现在的状态：'' 没选、'on' 选中、'dis' 反感
-  const stateOf = (chip) => TAG_STATES.find((s) => s && chip.classList.contains(s)) || '';
+  const rows = [];   // { kind: 'tag' | 'author' | 'book', name, was, now }
 
-  const section = (title, entries, cycle) => {
-    if (!entries.length) return;
+  const addRow = (kind, name, was, states) => {
+    const r = { kind, name, was, now: was };
+    const row = document.createElement('div');
+    row.className = 'op-row';
+    const label = document.createElement('span');
+    label.className = 'op-name';
+    label.textContent = name;
+    const seg = document.createElement('div');
+    seg.className = 'op-seg';
+    const paint = () => seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.state === r.now));
+    for (const [key, cfg] of Object.entries(states)) {
+      const b = document.createElement('button');
+      b.dataset.state = key;
+      b.className = 'op-' + key;
+      b.textContent = cfg.label;
+      b.onclick = () => { r.now = r.now === key ? '' : key; paint(); };
+      seg.appendChild(b);
+    }
+    paint();
+    row.append(label, seg);
+    rows.push(r);
+    return row;
+  };
+  const section = (title, els) => {
+    if (!els.length) return;
     const h = document.createElement('p');
     h.className = 'pick-title';
     h.textContent = title;
     const box = document.createElement('div');
-    box.className = 'pickchips';
-    for (const [kind, name, was, preset] of entries) {
-      const chip = document.createElement('button');
-      chip.className = 'pickchip' + (preset ? ' ' + preset : '');
-      chip.textContent = name;
-      picks.push({ kind, name, was, chip });
-      chip.onclick = () => {
-        const cur = stateOf(chip);
-        const next = cycle ? TAG_STATES[(TAG_STATES.indexOf(cur) + 1) % 3] : (cur ? '' : 'on');
-        chip.classList.remove('on', 'dis');
-        if (next) chip.classList.add(next);
-      };
-      box.appendChild(chip);
-    }
+    box.className = 'op-list';
+    box.append(...els);
     body.append(h, box);
   };
 
-  if (black) section('这一本', [['book', item.name || ('JM' + item.id), blockedIds.has(item.id) ? 'on' : '', 'on']]);
-  if (item.author) {
-    const was = hasAuthor(authorSet, item.author) ? 'on' : '';
-    section('作者', [['authors', item.author, was, was]]);
+  if (!opts.noBook) {
+    section('这一本', [addRow('book', item.name || ('JM' + item.id), blockedIds.has(item.id) ? 'black' : '',
+      { black: { label: '拉黑' } })]);
   }
-  section('标签', tags.map((t) => {
-    const k = normTag(t);
-    const was = tagSet.has(k) ? 'on' : (!black && dislikeTagSet.has(k)) ? 'dis' : '';
-    return ['tags', t, was, was];
-  }), !black);
+  if (item.author) section('作者', [addRow('author', item.author, authorStateOf(item.author), AUTHOR_STATES)]);
+  section('标签', tags.map((t) => addRow('tag', t, tagStateOf(t), TAG_STATES)));
 
   const tip = document.createElement('p');
   tip.className = 'hint';
-  tip.textContent = black
-    ? '点一下选中 / 取消。拉黑的作者、标签，之后搜索时带它们的本子都不显示；已拉黑的取消勾选就是解除。'
-    : '标签点一下收藏，再点一下改成反感（红色），再点取消。搜索时按「收藏标签数 - 反感标签数」排序，有收藏作者的更前；收藏的作者出新本会出现在「动态」里。';
+  tip.textContent = '收藏：搜索时排前面，收藏的作者出新本会出现在「动态」里。反感：不隐藏，只是搜索时往后排。'
+    + '拉黑：之后搜索时直接不显示。一个标签只能是其中一种，再点一下亮着的就是取消。';
   body.appendChild(tip);
 
-  const row = document.createElement('div');
-  row.className = 'sheet-actions';
+  const actions = document.createElement('div');
+  actions.className = 'sheet-actions';
   const ok = document.createElement('button');
-  ok.className = black ? 'primary danger' : 'primary';
-  ok.textContent = black ? '确定拉黑' : '保存收藏';
+  ok.className = 'primary';
+  ok.textContent = '保存';
   ok.onclick = async () => {
     ok.disabled = true;
-    const diff = { tags: { add: [], remove: [] }, authors: { add: [], remove: [] }, dislikes: { add: [], remove: [] } };
+    // 按名单分组：{ 'fav|tags': { list, kind, add: [], remove: [] } }
+    const ops = {};
+    const op = (cfg) => {
+      const key = cfg.list + '|' + cfg.kind;
+      return (ops[key] = ops[key] || { list: cfg.list, kind: cfg.kind, add: [], remove: [] });
+    };
     let bookChange = null;
-    for (const p of picks) {
-      const now = stateOf(p.chip);
-      if (now === p.was) continue;
-      if (p.kind === 'book') { bookChange = !!now; continue; }
-      // 反感的标签单独一份名单；收藏 ↔ 反感互转时服务端会自动从另一边拿走
-      const kindOf = (st) => (p.kind === 'tags' && st === 'dis' ? 'dislikes' : p.kind);
-      if (now) diff[kindOf(now)].add.push(p.name);
-      else diff[kindOf(p.was)].remove.push(p.name);
+    const favAdded = { tags: [], authors: [] };
+    const counts = { fav: 0, dis: 0, black: 0, off: 0 };
+    for (const r of rows) {
+      if (r.now === r.was) continue;
+      if (r.kind === 'book') { bookChange = r.now === 'black'; counts[r.now ? 'black' : 'off']++; continue; }
+      const states = r.kind === 'tag' ? TAG_STATES : AUTHOR_STATES;
+      // 换到别的名单：服务端会自动从原来那份里拿走；变成不选：从原来那份里删掉
+      if (r.now) op(states[r.now]).add.push(r.name); else op(states[r.was]).remove.push(r.name);
+      counts[r.now || 'off']++;
+      if (r.now === 'fav') favAdded[r.kind === 'tag' ? 'tags' : 'authors'].push(r.name);
     }
-    const known = picks.filter((p) => p.was).map((p) => p.name);
-    let moved = 0;
-    for (const kind of ['tags', 'authors', 'dislikes']) {
-      if (diff[kind].add.length || diff[kind].remove.length) {
-        const res = await setNames(list, kind, diff[kind].add, diff[kind].remove, { known });
-        if (res) moved += res.moved.length;
-      }
-    }
-    if (bookChange !== null) await toggleBlock(item, true);
+    for (const o of Object.values(ops)) await setNames(o.list, o.kind, o.add, o.remove, { noAsk: true });
+    if (bookChange !== null && bookChange !== blockedIds.has(item.id)) await toggleBlock(item, true);
     $('#sheet').classList.add('hidden');
-    if (moved) return;   // 已经提示过「移到了…」
-    const added = [...diff.tags.add, ...diff.authors.add];
-    const n = added.length + (bookChange ? 1 : 0);
-    const removed = diff.tags.remove.length + diff.authors.remove.length;
-    if (!n && !removed && bookChange === null && !diff.dislikes.add.length && !diff.dislikes.remove.length) return;
-    if (black) {
-      toast(n ? `已拉黑 ${n} 项，下次搜索起不再显示` : '已更新黑名单');
-    } else if (!(added.length && window.petFavorited
-      && petFavorited({ tags: diff.tags.add, authors: diff.authors.add }))) {
-      toast(added.length ? `已收藏 ${added.length} 项`
-        : diff.dislikes.add.length ? `已把 ${diff.dislikes.add.length} 个标签标成反感` : '已更新喜好');
-    }
+    const parts = [];
+    if (counts.fav) parts.push(`收藏 ${counts.fav} 项`);
+    if (counts.dis) parts.push(`反感 ${counts.dis} 项`);
+    if (counts.black) parts.push(`拉黑 ${counts.black} 项`);
+    if (counts.off) parts.push(`取消 ${counts.off} 项`);
+    if (!parts.length) return;
+    if (favAdded.tags.length + favAdded.authors.length && window.petFavorited && petFavorited(favAdded)) return;
+    toast('已' + parts.join('，') + (counts.black ? '，下次搜索起不再显示' : ''));
   };
-  row.appendChild(ok);
-  body.appendChild(row);
+  actions.appendChild(ok);
+  body.appendChild(actions);
   $('#sheet').classList.remove('hidden');
 }
+// 旧入口名字留着
+const openPickSheet = (list, item) => openActionSheet(item);
 
 /* ---- 喜好管理：本子黑名单、拉黑的标签 / 作者、收藏的标签 / 作者、反感的标签，一个弹层里切换 ---- */
 const NAME_LISTS = {

@@ -1690,6 +1690,22 @@ def _job_export(album_dir: Path, job: dict, fmt: str) -> None:
     job["name"] = out.name
 
 
+def _job_cover(album_dir: Path, job: dict) -> None:
+    """把封面（第一页）复制一份到备份目录，拿去分享。"""
+    files = _album_images(album_dir)
+    if not files:
+        raise RuntimeError("这本没有图片")
+    job["total"] = 1
+    meta = read_meta(album_dir)
+    safe = re.sub(r'[\\/:*?"<>|\s]+', "_", str(meta.get("name") or ""))[:40].strip("_")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    out = BACKUP_DIR / f"JM{album_dir.name}{'_' + safe if safe else ''}_封面{files[0].suffix.lower()}"
+    shutil.copyfile(files[0], out)
+    job["done"] = 1
+    job["path"] = str(out)
+    job["name"] = out.name
+
+
 def start_job(album_id: str, kind: str) -> dict:
     album_dir = DOWNLOAD_DIR / album_id
     if not album_dir.is_dir():
@@ -1706,6 +1722,8 @@ def start_job(album_id: str, kind: str) -> dict:
         try:
             if kind == "compress":
                 _job_compress(album_dir, job)
+            elif kind == "cover":
+                _job_cover(album_dir, job)
             else:
                 _job_export(album_dir, job, kind)
             job["state"] = "done"
@@ -2266,7 +2284,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self.body_json()
             album_id = re.sub(r"\D", "", str(body.get("id", "")))
             kind = body.get("kind")
-            if not album_id or kind not in ("compress", "zip", "pdf"):
+            if not album_id or kind not in ("compress", "zip", "pdf", "cover"):
                 return self.send_json({"error": "参数不对"}, 400)
             return self.send_json(start_job(album_id, kind))
 
