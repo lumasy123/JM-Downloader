@@ -300,13 +300,31 @@ class MainActivity : Activity() {
             // 只允许分享 App 自己目录下的文件
             if (!file.isFile || !file.canonicalPath.startsWith(base.canonicalPath)) return false
             val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
-            // 号单是纯文本，聊天软件对 text/plain 更友好；备份是 JSON
-            val mime = if (file.name.endsWith(".txt")) "text/plain" else "application/json"
+            // 按扩展名给类型：聊天软件、网盘靠它决定怎么收（PDF 当 JSON 发出去会打不开）
+            val mime = when (file.extension.lowercase()) {
+                "txt" -> "text/plain"
+                "pdf" -> "application/pdf"
+                "zip" -> "application/zip"
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                "gif" -> "image/gif"
+                else -> "application/json"
+            }
             val send = Intent(Intent.ACTION_SEND)
                 .setType(mime)
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            runOnUiThread { startActivity(Intent.createChooser(send, "保存或发送备份")) }
+            runOnUiThread { startActivity(Intent.createChooser(send, "分享或保存")) }
+            return true
+        }
+
+        @JavascriptInterface
+        fun shareText(text: String): Boolean {
+            val send = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, text)
+            runOnUiThread { startActivity(Intent.createChooser(send, "分享")) }
             return true
         }
     }
