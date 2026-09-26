@@ -1847,7 +1847,7 @@ body.masked .mw-all::after { transform: none; }
 .card .acts .unblock { height: 28px; margin-top: 6px; }
 .tag, .tagchip, .pickchip { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .card .tag.fav,
-.detail-tags .tag.fav { background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)); color: var(--accent); }
+.detail-tags .tag.fav { background: var(--accent); color: #fff; }
 .card .author.fav::before { content: '★ '; }
 .card .author.bad { text-decoration: line-through; opacity: .5; }
 
@@ -1965,6 +1965,10 @@ body.masked .mw-all::after { transform: none; }
 .seg { display: flex; gap: 6px; margin: 14px 16px 6px; padding: 4px; border-radius: 12px; background: var(--surface-2); }
 .seg button { flex: 1; height: 34px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-size: 13.5px; cursor: pointer; }
 .seg button.on { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: 0 1px 4px var(--shadow); }
+.explore-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.explore-label { flex: none; font-size: 12.5px; color: var(--muted); margin-right: 2px; }
+.explore-row .explore-btn { flex: 1; min-width: 0; margin-top: 0; padding: 0 4px; white-space: nowrap; font-size: 13px; }
+.explore-row .explore-btn.on { border-style: solid; background: var(--accent); color: #fff; }
 .explore-btn {
   width: 100%;
   margin-top: 10px;
@@ -2155,9 +2159,9 @@ body.masked .mw-all::after { transform: none; }
 .detail-tags .tag-fav-btn { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
   border: 1px dashed var(--accent); background: none; color: var(--accent); }
 .detail-tags .tag-fav-btn svg { width: 12px; height: 12px; }
+/* 反感的标签：绿灰底（浅色白字、深色黑字），和普通的灰底、收藏的红底分开 */
 .card .tag.dis,
-.detail-tags .tag.dis { background: color-mix(in srgb, #f06a6a 14%, var(--surface-2)); color: #e05656; }
-.pickchip.dis { background: #e05656; border-color: #e05656; color: #fff; }
+.detail-tags .tag.dis { background: var(--dis-bg); color: var(--dis-fg); }
 .pickchip.dis::before { content: '反感 '; font-size: 11px; opacity: .85; }
 .detail-notetext { margin: 8px 2px 0; padding: 10px 12px; border-radius: 12px; background: var(--surface);
   color: var(--muted); font-size: 13px; white-space: pre-wrap; word-break: break-word; cursor: pointer; }
@@ -2181,3 +2185,15 @@ body.masked .mw-all::after { transform: none; }
   font-weight: 650;
   cursor: pointer;
 }
+
+/* 反感标签的颜色 */
+:root { --dis-bg: #6f8579; --dis-fg: #101412; }
+:root[data-theme="light"] { --dis-bg: #8ba096; --dis-fg: #fff; }
+.pickchip.dis { background: var(--dis-bg); border-color: var(--dis-bg); color: var(--dis-fg); }
+
+/* 多选一的弹窗：按钮多，排成一排平分 */
+.dialog-actions.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.dialog-actions.choices button { flex: 1 1 0; min-width: 56px; padding: 0 6px; white-space: nowrap; }
+
+/* 提示条上的「确定」：直接关掉 */
+#snackbar button.ok { color: var(--toast-fg); opacity: .8; font-weight: 600; padding: 0 10px; }

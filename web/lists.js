@@ -54,18 +54,57 @@ async function loadFavorites() {
   applyFavorites(await api.get('/api/favorites'));
 }
 
+// 一个标签只能在收藏、反感、拉黑其中一种里；作者只能收藏或拉黑其中一种
+const TAG_HOMES = [
+  { list: 'fav', kind: 'tags', label: '收藏', full: '收藏标签', set: () => favTagSet },
+  { list: 'fav', kind: 'dislikes', label: '反感', full: '反感标签', set: () => dislikeTagSet },
+  { list: 'black', kind: 'tags', label: '拉黑', full: '拉黑标签', set: () => blockedTagSet, danger: true },
+];
+const AUTHOR_HOMES = [
+  { list: 'fav', kind: 'authors', label: '收藏', full: '收藏作者', set: () => favAuthorSet },
+  { list: 'black', kind: 'authors', label: '拉黑', full: '拉黑作者', set: () => blockedAuthorSet, danger: true },
+];
+
+// 要加的名字已经在另一种名单里：弹窗问放到哪一种。返回 { keep: 照原样加的, moves: [[名单, 名字]], changed: 挪了几个 }
+async function resolveHomes(list, kind, add, known = []) {
+  const homes = kind === 'authors' ? AUTHOR_HOMES : TAG_HOMES;
+  const target = homes.find((h) => h.list === list && h.kind === kind);
+  const skip = new Set(known.map(normTag));
+  const keep = [];
+  const moves = [];
+  const notes = [];
+  for (const name of add) {
+    const k = normTag(name);
+    const other = homes.find((h) => h !== target && h.set().has(k));
+    if (!target || !other || skip.has(k)) { keep.push(name); continue; }
+    const choice = await choiceDialog({
+      title: `「${name}」已经在${other.full}里了`,
+      message: kind === 'authors'
+        ? '一位作者只能收藏或拉黑其中一种，要放到哪一种？'
+        : '一个标签只能放在收藏、反感、拉黑其中一种里，要放到哪一种？',
+      choices: homes.map((h) => ({ label: h.label, value: h, primary: h === target, danger: h.danger })),
+    });
+    if (!choice || choice === other) continue;   // 取消，或者选了原来那种：不动
+    if (choice === target) keep.push(name); else moves.push([choice, name]);
+    notes.push(`「${name}」从${other.full}移到了${choice.full}`);
+  }
+  return { keep, moves, notes };
+}
+
 // 黑名单 / 收藏 / 反感里的标签、作者一次加减一批，改完把界面上的标记刷新一遍。
-// 收藏标签和反感标签互斥：服务端会把另一边的挪过来，这里提示一声；返回挪过的名字
-async function setNames(list, kind, add = [], remove = []) {
+// 要加的已经在别的名单里时先问放哪种（opts.known 里的是用户刚在弹窗里明确挑过的，不再问）。
+// 返回 { moved }：从别的名单挪过来的名字
+async function setNames(list, kind, add = [], remove = [], opts = {}) {
+  const { keep, moves, notes } = opts.noAsk
+    ? { keep: add, moves: [], notes: [] }
+    : await resolveHomes(list, kind, add, opts.known);
+  add = keep;
+  for (const [home, name] of moves) await setNames(home.list, home.kind, [name], [], { noAsk: true });
+  if (notes.length) toast(notes.join('；'));
+  if (!add.length && !remove.length) return { moved: notes };
   const res = await api.post('/api/names', { list, kind, add, remove });
   if (res.error) { toast(res.error); return false; }
-  const moved = res.moved || [];
-  if (moved.length) {
-    const names = moved.map((t) => `「${t}」`).join('');
-    toast(kind === 'dislikes'
-      ? `${names}已收藏，现取消收藏并转移到反感标签`
-      : `${names}原本在反感标签，现取消反感并转移到收藏标签`);
-  }
+  const moved = [...notes, ...(res.moved || [])];
   applyBlacklist(res.blacklist);
   applyFavorites(res.favorites);
   feedStale = true;   // 收藏、拉黑变了，动态要重新取
@@ -556,16 +595,17 @@ async function openPickSheet(list, item) {
       if (now) diff[kindOf(now)].add.push(p.name);
       else diff[kindOf(p.was)].remove.push(p.name);
     }
+    const known = picks.filter((p) => p.was).map((p) => p.name);
     let moved = 0;
     for (const kind of ['tags', 'authors', 'dislikes']) {
       if (diff[kind].add.length || diff[kind].remove.length) {
-        const res = await setNames(list, kind, diff[kind].add, diff[kind].remove);
+        const res = await setNames(list, kind, diff[kind].add, diff[kind].remove, { known });
         if (res) moved += res.moved.length;
       }
     }
     if (bookChange !== null) await toggleBlock(item, true);
     $('#sheet').classList.add('hidden');
-    if (moved) return;   // 已经提示过「转移到…」了
+    if (moved) return;   // 已经提示过「移到了…」
     const added = [...diff.tags.add, ...diff.authors.add];
     const n = added.length + (bookChange ? 1 : 0);
     const removed = diff.tags.remove.length + diff.authors.remove.length;

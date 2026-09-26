@@ -71,7 +71,12 @@
       <button class="chip" data-kind="author">作者</button>
       <button class="chip" data-kind="tag">标签</button>
     </div>
-    <button id="btn-explore" class="explore-btn" type="button">探索：按收藏标签挑 15 本没看过的</button>
+    <div class="explore-row" id="explore-row">
+      <span class="explore-label">探索</span>
+      <button class="explore-btn" type="button" data-mode="tags">按收藏标签</button>
+      <button class="explore-btn" type="button" data-mode="authors">按作者</button>
+      <button class="explore-btn" type="button" data-mode="hot">近期热门</button>
+    </div>
     <label class="blk-toggle">
       <input type="checkbox" class="switch" id="show-blocked">
       <span>显示已拉黑的本子和标签</span>
@@ -395,7 +400,7 @@
   </div>
 </div>
 
-<div id="snackbar"><span></span><button></button></div>
+<div id="snackbar"><span></span><button data-undo></button><button data-ok class="ok">确定</button></div>
 
 <div id="dialog" class="dialog hidden" role="dialog" aria-modal="true">
   <div class="dialog-box">

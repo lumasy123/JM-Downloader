@@ -438,24 +438,36 @@ def author_keys(author) -> set[str]:
 def change_names(which: str, kind: str, add, remove) -> list[str]:
     """黑名单 / 收藏 / 反感名单里的标签、作者，一次加减一批。
 
-    收藏标签和反感标签互斥：加进一边时，如果原来在另一边就从那边拿走。返回被这样挪过来的名字。
+    一个标签只能在收藏、反感、拉黑其中一种里：加进一种时，从另外两种里拿走（前端会先问用户放哪种）。
+    作者同理，收藏和拉黑只能二选一。返回被这样挪过来的名字。
     """
-    path_lock = (_BLACKLIST_LOCK, load_blacklist, save_blacklist) if which == "black" \
-        else (_FAVORITES_LOCK, load_favorites, save_favorites)
-    lock, load, save = path_lock
+    adding = {norm_tag(x) for x in (add or [])}
+    # 同一种名字（标签 / 作者）的所有名单：(文件, 字段)
+    groups = {"tags": [("fav", "tags"), ("fav", "dislikes"), ("black", "tags")],
+              "dislikes": [("fav", "tags"), ("fav", "dislikes"), ("black", "tags")],
+              "authors": [("fav", "authors"), ("black", "authors")]}
     moved: list[str] = []
-    with lock:
-        data = load()
+    with _BLACKLIST_LOCK, _FAVORITES_LOCK:
+        files = {"black": load_blacklist(), "fav": load_favorites()}
+        data = files[which]
         drop = {norm_tag(x) for x in (remove or [])}
         cur = [x for x in data[kind] if norm_tag(x) not in drop]
         # 新加的排在前面，名单里最近加的一眼能看到
         data[kind] = _clean_names([*(add or []), *cur])
-        if which == "fav" and kind in ("tags", "dislikes"):
-            other = "dislikes" if kind == "tags" else "tags"
-            adding = {norm_tag(x) for x in (add or [])}
-            moved = [x for x in data[other] if norm_tag(x) in adding]
-            data[other] = [x for x in data[other] if norm_tag(x) not in adding]
-        save(data)
+        touched = {which}
+        for f, field in groups[kind]:
+            if (f, field) == (which, kind) or not adding:
+                continue
+            lst = files[f][field]
+            hit = [x for x in lst if norm_tag(x) in adding]
+            if hit:
+                moved += hit
+                files[f][field] = [x for x in lst if norm_tag(x) not in adding]
+                touched.add(f)
+        if "black" in touched:
+            save_blacklist(files["black"])
+        if "fav" in touched:
+            save_favorites(files["fav"])
     return moved
 
 
@@ -1308,34 +1320,87 @@ EXPLORE_TAGS_PER_ROUND = 4     # 每次随机挑这么多个收藏标签去搜�
 EXPLORE_CANDIDATES = 40        # 最多查这么多本的标签来算和收藏标签的重合
 
 
-def explore(exclude: set[str]) -> dict:
-    """探索：从收藏标签里随机挑几个、随机换排序和页码去搜，
-    按和收藏标签重合的个数排，挑 15 本还没下载过的。exclude 是这一轮已经给过的，换一批时不重复。"""
+EXPLORE_MODES = ("tags", "authors", "hot")
+
+
+def _split_authors(author) -> list[str]:
+    """「甲、乙」拆成能拿去搜的名字（保留原来的大小写）。"""
+    return [x.strip() for x in re.split(r"[、,，/／&＆;；]+", str(author or "")) if x.strip()]
+
+
+def _explore_sources(mode: str, fav: dict, client, rnd) -> tuple[list[str], list[list[dict]]]:
+    """按探索方式去禁漫取几页候选，返回（用了哪些来源，每个来源的结果）。"""
+    c = jmcomic.JmMagicConstants
+    orders = [c.ORDER_BY_LATEST, c.ORDER_BY_VIEW, c.ORDER_BY_LIKE, c.ORDER_BY_SCORE]
+
+    def search(fn, query):
+        def one():
+            try:
+                items = _parse_results(fn(search_query=query, page=rnd.randint(1, 3),
+                                          order_by=rnd.choice(orders), time=c.TIME_ALL))
+                if not items:   # 冷门的翻到后面就空了，退回第一页
+                    items = _parse_results(fn(search_query=query, page=1,
+                                              order_by=rnd.choice(orders), time=c.TIME_ALL))
+                return items
+            except Exception:
+                return []
+        return one
+
+    if mode == "tags":
+        picked = rnd.sample(fav["tags"], min(EXPLORE_TAGS_PER_ROUND, len(fav["tags"])))
+        jobs = [search(client.search_tag, t) for t in picked]
+    elif mode == "authors":
+        # 收藏的作者 + 书架上的作者（打过 4 分以上的优先），各挑两位去搜他们的其他作品
+        bad = blocked_authors()
+        fav_names = [a for a in fav["authors"] if norm_tag(a) not in bad]
+        ratings = load_ratings()
+        liked, others = [], []
+        for d in DOWNLOAD_DIR.iterdir() if DOWNLOAD_DIR.is_dir() else []:
+            if not d.is_dir():
+                continue
+            r = rating_of(ratings["scores"].get(d.name, {}), ratings["criteria"])
+            for a in _split_authors(read_meta(d).get("author")):
+                if norm_tag(a) in bad or norm_tag(a) in {norm_tag(x) for x in fav_names}:
+                    continue
+                (liked if r is not None and r >= 4 else others).append(a)
+        shelf_names = list(dict.fromkeys(liked)) or list(dict.fromkeys(others))
+        picked = rnd.sample(fav_names, min(2, len(fav_names)))
+        picked += rnd.sample(shelf_names, min(EXPLORE_TAGS_PER_ROUND - len(picked), len(shelf_names)))
+        jobs = [search(client.search_author, a) for a in picked]
+    else:
+        # 近期热门：周榜、月榜各随机翻一页
+        page_w, page_m = rnd.randint(1, 3), rnd.randint(1, 3)
+        picked = [f"周榜第 {page_w} 页", f"月榜第 {page_m} 页"]
+
+        def rank(fn, page):
+            def one():
+                try:
+                    return _parse_results(fn(page))
+                except Exception:
+                    return []
+            return one
+        jobs = [rank(client.week_ranking, page_w), rank(client.month_ranking, page_m)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = list(pool.map(lambda f: f(), jobs))
+    return picked, pages
+
+
+def explore(exclude: set[str], mode: str = "tags") -> dict:
+    """探索，三种方式：
+    - tags：从收藏标签里随机挑几个、随机换排序和页码去搜，只要和收藏标签有重合的；
+    - authors：搜收藏的作者、书架上高分作者的其他作品；
+    - hot：周榜、月榜。
+    都按「收藏标签数 - 反感标签数」排，挑 15 本还没下载过的。exclude 是这一轮已经给过的，换一批时不重复。"""
     import random
     fav = load_favorites()
     fav_tags = {norm_tag(t) for t in fav["tags"]}
     dis_tags = {norm_tag(t) for t in fav["dislikes"]}
-    if not fav_tags:
+    if mode == "tags" and not fav_tags:
         return {"items": [], "error": "还没有收藏标签"}
-    c = jmcomic.JmMagicConstants
-    orders = [c.ORDER_BY_LATEST, c.ORDER_BY_VIEW, c.ORDER_BY_LIKE, c.ORDER_BY_SCORE]
     client = OPTION.new_jm_client()
-    picked = random.sample(fav["tags"], min(EXPLORE_TAGS_PER_ROUND, len(fav["tags"])))
-
-    def one(tag: str) -> list[dict]:
-        try:
-            res = client.search_tag(search_query=tag, page=random.randint(1, 3),
-                                    order_by=random.choice(orders), time=c.TIME_ALL)
-            items = _parse_results(res)
-            if not items:   # 冷门标签翻到后面就空了，退回第一页
-                items = _parse_results(client.search_tag(search_query=tag, page=1,
-                                                         order_by=random.choice(orders), time=c.TIME_ALL))
-            return items
-        except Exception:
-            return []
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        pages = list(pool.map(one, picked))
+    picked, pages = _explore_sources(mode, fav, client, random)
+    if not picked:
+        return {"items": [], "error": "还没有收藏的作者，书架上也没有作者信息"}
     blocked = blocked_ids()
     bad_authors = blocked_authors()
     cand: dict[str, dict] = {}
@@ -1356,10 +1421,11 @@ def explore(exclude: set[str]) -> dict:
         it["fav_tags"] = [t for t in it["tags"] if norm_tag(t) in fav_tags]
         it["dis_tags"] = [t for t in it["tags"] if norm_tag(t) in dis_tags]
         score = len(it["fav_tags"]) - len(it["dis_tags"])
-        if score > 0:
+        # 按标签探索只要和收藏有重合的；另外两种只去掉反感比收藏多的
+        if score > 0 or (mode != "tags" and score >= 0):
             scored.append((score, random.random(), it))
-    scored.sort(key=lambda x: (-x[0], x[1]))   # 命中多的在前，一样多的随机
-    return {"items": [it for _, _, it in scored[:EXPLORE_SIZE]], "tags": picked}
+    scored.sort(key=lambda x: (-x[0], x[1]))   # 得分高的在前，一样的随机
+    return {"items": [it for _, _, it in scored[:EXPLORE_SIZE]], "tags": picked, "mode": mode}
 
 
 def mark_feed_seen(ids: list[str]) -> None:
@@ -2205,9 +2271,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(start_job(album_id, kind))
 
         if path == "/api/explore":
-            ex = {re.sub(r"\D", "", str(x)) for x in self.body_json().get("exclude") or []}
+            body = self.body_json()
+            ex = {re.sub(r"\D", "", str(x)) for x in body.get("exclude") or []}
+            mode = body.get("mode") if body.get("mode") in EXPLORE_MODES else "tags"
             try:
-                return self.send_json(explore(ex))
+                return self.send_json(explore(ex, mode))
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
 

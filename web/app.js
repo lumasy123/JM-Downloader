@@ -780,6 +780,41 @@ function confirmDialog({ title, message = '', ok = '确定', danger = false }) {
   });
 }
 
+// 多选一：choices = [{ label, value, primary, danger }]，取消返回 null
+function choiceDialog({ title, message = '', choices }) {
+  return new Promise((resolve) => {
+    const dlg = $('#dialog');
+    const actions = dlg.querySelector('.dialog-actions');
+    const saved = actions.innerHTML;
+    dlg.querySelector('h3').textContent = title;
+    dlg.querySelector('p').textContent = message;
+    const done = (value) => {
+      dlg.classList.add('hidden');
+      dlg.onclick = null;
+      actions.innerHTML = saved;
+      actions.classList.remove('choices');
+      resolve(value);
+    };
+    actions.innerHTML = '';
+    actions.classList.add('choices');
+    for (const c of choices) {
+      const b = document.createElement('button');
+      b.className = (c.primary ? 'primary' : 'ghost') + (c.danger ? ' danger' : '');
+      b.textContent = c.label;
+      b.onclick = () => done(c.value);
+      actions.appendChild(b);
+    }
+    const no = document.createElement('button');
+    no.className = 'ghost';
+    no.dataset.no = '';
+    no.textContent = '取消';
+    no.onclick = () => done(null);
+    actions.appendChild(no);
+    dlg.onclick = (e) => { if (e.target === dlg) done(null); };
+    dlg.classList.remove('hidden');
+  });
+}
+
 /* ------------------------------------------------------ 点作者名复制 */
 // guard 返回 false 时不拦截点击（比如书架多选时，点作者还是勾选这本）
 function makeCopyable(el, text, guard) {
@@ -839,12 +874,14 @@ function formatDuration(sec) {
 /* ------------------------------------------------------ 可撤销的提示条 */
 let snackTimer = null;
 
+// 带「撤销」的提示条；旁边的「确定」直接关掉，连续操作时不用等它自己消失
 function snackbar(text, actionText, onAction, ms = 6000) {
   const bar = $('#snackbar');
   bar.querySelector('span').textContent = text;
-  const btn = bar.querySelector('button');
+  const btn = bar.querySelector('[data-undo]');
   btn.textContent = actionText;
   btn.onclick = () => { hideSnackbar(); onAction(); };
+  bar.querySelector('[data-ok]').onclick = hideSnackbar;
   bar.classList.add('show');
   clearTimeout(snackTimer);
   snackTimer = setTimeout(hideSnackbar, ms);

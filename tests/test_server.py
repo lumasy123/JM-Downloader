@@ -97,6 +97,14 @@ class TestNames(Base):
         self.assertEqual(res["favorites"]["dislikes"], [])
         self.assertEqual(res["moved"], ["ntr"])
         self.post("/api/names", {"list": "fav", "kind": "tags", "remove": ["NTR", "眼镜"]})
+        # 拉黑也一样：加进黑名单就从收藏里拿走
+        self.post("/api/names", {"list": "fav", "kind": "tags", "add": ["触手"]})
+        res = self.post("/api/names", {"list": "black", "kind": "tags", "add": ["触手"]})
+        self.assertEqual(res["favorites"]["tags"], [])
+        self.assertEqual(res["blacklist"]["tags"], ["触手"])
+        res = self.post("/api/names", {"list": "fav", "kind": "dislikes", "add": ["触手"]})
+        self.assertEqual(res["blacklist"]["tags"], [])
+        self.post("/api/names", {"list": "fav", "kind": "dislikes", "remove": ["触手"]})
 
     def test_author_keys(self):
         self.assertEqual(srv.author_keys("甲、乙 & 丙"), {"甲、乙 & 丙", "甲", "乙", "丙"})

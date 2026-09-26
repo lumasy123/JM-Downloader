@@ -48,20 +48,29 @@ function favSuggest(kind, onAdded) {
 }
 
 /* ------------------------------------------------------------ 探索 */
-// 按收藏的标签挑 15 本还没下载的，命中收藏标签越多越靠前；「换一批」不和这一轮已经给过的重复。
+// 三种：按收藏标签、按作者（收藏的 + 书架上高分的）、近期热门（周榜月榜）。
+// 都挑 15 本还没下载的，「收藏标签数 - 反感标签数」越高越靠前；「换一批」不和这一轮已经给过的重复。
 // 这一批显示出来时，下一批就在后台开始挑，点「换一批」基本不用等
+const EXPLORE_MODES = {
+  tags: { wait: '正在按收藏的标签帮你挑……', from: '从标签' },
+  authors: { wait: '正在翻收藏作者和书架上高分作者的其他作品……', from: '从作者' },
+  hot: { wait: '正在翻周榜、月榜……', from: '从' },
+};
+let exploreMode = 'tags';
 const exploreSeen = new Set();
-let explorePrefetch = null;   // { promise, done }
+let explorePrefetch = null;   // { promise, done, mode }
 
 function fetchExplore() {
-  const job = { done: false };
-  job.promise = api.post('/api/explore', { exclude: [...exploreSeen] })
+  const job = { done: false, mode: exploreMode };
+  job.promise = api.post('/api/explore', { exclude: [...exploreSeen], mode: exploreMode })
     .catch(() => ({ error: '网络错误' }))
     .then((res) => { job.done = true; return res; });
   return job;
 }
 
-async function doExplore(more = false) {
+async function doExplore(more = false, mode = exploreMode) {
+  if (mode !== exploreMode) { exploreMode = mode; more = false; }
+  $$('#explore-row button').forEach((b) => b.classList.toggle('on', b.dataset.mode === exploreMode));
   await Promise.all([loadBlacklist(), loadFavorites()]);
   const box = $('#search-results');
   const hint = $('#search-hint');
@@ -70,23 +79,24 @@ async function doExplore(more = false) {
   const oldBar = $('#direct-bar');
   if (oldBar) oldBar.remove();
   $('#view-download').scrollTop = 0;
-  if (!favTags.length) {
+  if (exploreMode === 'tags' && !favTags.length) {
     // 没收藏标签：直接给出推荐，点完就能探索
     hint.textContent = '探索是按你收藏的标签挑本子的，先收藏几个吧。';
     box.replaceChildren(favSuggest('tags'));
     const go = document.createElement('button');
     go.className = 'primary wide explore-go';
     go.textContent = '收藏好了，开始探索';
-    go.onclick = () => doExplore(false);
+    go.onclick = () => doExplore(false, 'tags');
     box.appendChild(go);
     return;
   }
   if (!more) { exploreSeen.clear(); explorePrefetch = null; }
 
-  let job = more && explorePrefetch ? explorePrefetch : fetchExplore();
+  let job = more && explorePrefetch && explorePrefetch.mode === exploreMode ? explorePrefetch : fetchExplore();
   explorePrefetch = null;
+  const cfg = EXPLORE_MODES[exploreMode];
   if (!job.done) {
-    hint.textContent = '正在按收藏的标签帮你挑……';
+    hint.textContent = cfg.wait;
     renderSearchSkeleton();
     if (more) toast('正在帮你挑下一批，马上好~');
   }
@@ -100,18 +110,22 @@ async function doExplore(more = false) {
     hint.textContent = '探索失败：' + res.error;
     return;
   }
+  if (res.mode && res.mode !== exploreMode) return;   // 等的时候已经换了别的探索方式
   res.items.forEach((it) => {
     exploreSeen.add(it.id);
     const card = makeCard(it);
     const info = card.querySelector('.info');
     const hit = document.createElement('div');
     hit.className = 'upd';
-    hit.textContent = `命中 ${it.fav_tags.length} 个收藏标签`;
+    const dis = (it.dis_tags || []).length;
+    hit.textContent = it.fav_tags.length || dis
+      ? `命中 ${it.fav_tags.length} 个收藏标签` + (dis ? `、${dis} 个反感标签` : '')
+      : '没有命中收藏标签';
     info.insertBefore(hit, info.querySelector('.tags'));
     box.appendChild(card);
   });
   hint.textContent = res.items.length
-    ? `从「${(res.tags || []).join('」「')}」里挑的 ${res.items.length} 本 · 命中收藏标签越多越靠前`
+    ? `${cfg.from}「${(res.tags || []).join('」「')}」里挑的 ${res.items.length} 本 · 收藏标签越多越靠前`
     : '这一批没找到合适的，换一批试试';
   const pager = $('#pager');
   pager.innerHTML = '';
@@ -124,7 +138,7 @@ async function doExplore(more = false) {
   // 下一批现在就开始挑
   explorePrefetch = fetchExplore();
 }
-$('#btn-explore').onclick = () => doExplore(false);
+$$('#explore-row button').forEach((b) => { b.onclick = () => doExplore(false, b.dataset.mode); });
 
 /* ------------------------------------------------------------ 动态 */
 // 三块分开取、先到先显示：书架连载更新、收藏作者的新本、（可选）和收藏标签最搭的新本。
