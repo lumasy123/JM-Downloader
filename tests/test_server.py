@@ -130,6 +130,22 @@ class TestRatingsNotes(Base):
         self.assertNotIn("100001", srv.load_notes())
 
 
+class TestBookmarks(Base):
+    def test_add_remove_and_cleanup(self):
+        make_book("100005")
+        self.assertEqual(self.post("/api/bookmark", {"id": "100005", "page": 2, "on": True})["pages"], [2])
+        self.assertEqual(self.post("/api/bookmark", {"id": "100005", "page": 0, "on": True})["pages"], [0, 2])
+        self.assertEqual(self.get("/api/bookmarks?id=100005")["pages"], [0, 2])
+        self.assertIn("error", self.post("/api/bookmark", {"id": "100005", "page": -1, "on": True}))
+        self.assertIn("error", self.post("/api/bookmark", {"id": "999999", "page": 1, "on": True}))
+        backup = json.loads(Path(self.post("/api/backup/export", {})["path"]).read_text("utf-8"))
+        self.assertEqual(backup["bookmarks"]["100005"], [0, 2])
+        self.assertEqual(self.post("/api/bookmark", {"id": "100005", "page": 0, "on": False})["pages"], [2])
+        req = urllib.request.Request(self.base + "/api/album?id=100005", method="DELETE")
+        urllib.request.urlopen(req, timeout=20).read()
+        self.assertNotIn("100005", srv.load_bookmarks())   # 删书时书签一起删
+
+
 class TestListExport(Base):
     def test_sections_only_ids(self):
         make_book("100002", name="带标题的本子")

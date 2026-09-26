@@ -17,6 +17,7 @@ notes.json
 feed.json
 info_cache.json
 ratings.json
+bookmarks.json
 
 # Python 缓存、本地工具配置
 __pycache__/

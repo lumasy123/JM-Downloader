@@ -92,6 +92,9 @@ FAVORITES_PATH = DOWNLOAD_DIR.parent / "favorites.json"
 # 书架上每本的小笔记
 NOTES_PATH = DOWNLOAD_DIR.parent / "notes.json"
 
+# 阅读器里加的页面书签：{漫画id: [页码...]}
+BOOKMARKS_PATH = DOWNLOAD_DIR.parent / "bookmarks.json"
+
 # 评分：自定义的几条标准（画面、剧情……），每本按每条打 1~5 分，平均分用来排序、筛选
 RATINGS_PATH = DOWNLOAD_DIR.parent / "ratings.json"
 DEFAULT_CRITERIA = ["画面", "剧情", "实用性"]
@@ -383,6 +386,24 @@ def load_ratings() -> dict:
 
 def save_ratings(data: dict) -> None:
     RATINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+_BOOKMARKS_LOCK = threading.Lock()
+
+
+def load_bookmarks() -> dict[str, list[int]]:
+    if BOOKMARKS_PATH.exists():
+        try:
+            data = json.loads(BOOKMARKS_PATH.read_text("utf-8"))
+            return {str(k): sorted({int(x) for x in v if int(x) >= 0})
+                    for k, v in data.items() if str(k).isdigit() and isinstance(v, list) and v}
+        except Exception:
+            pass
+    return {}
+
+
+def save_bookmarks(data: dict) -> None:
+    BOOKMARKS_PATH.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
 
 
 def rating_of(scores: dict, criteria: list[str]) -> float | None:
@@ -1625,6 +1646,7 @@ def export_backup(body: dict) -> dict:
         "favorites": load_favorites(),
         "notes": load_notes(),
         "ratings": load_ratings(),
+        "bookmarks": load_bookmarks(),
         # 只存书目不存图片：换手机后可以照着这份清单重新下载
         "shelf": shelf,
         "progress": _clean_numbers(body.get("progress")),
@@ -1773,6 +1795,15 @@ def import_backup(data: dict) -> dict:
                 ratings["scores"][k] = {str(c): int(n) for c, n in v.items() if str(n).isdigit() and 1 <= int(n) <= 5}
         save_ratings(ratings)
 
+    marks_in = data.get("bookmarks") if isinstance(data.get("bookmarks"), dict) else {}
+    with _BOOKMARKS_LOCK:
+        marks = load_bookmarks()
+        for k, v in marks_in.items():
+            k = re.sub(r"\D", "", str(k))
+            if k and isinstance(v, list):
+                marks[k] = sorted({*marks.get(k, []), *(int(x) for x in v if str(x).isdigit())})
+        save_bookmarks(marks)
+
     notes_in = data.get("notes") if isinstance(data.get("notes"), dict) else {}
     with _NOTES_LOCK:
         notes = load_notes()
@@ -1890,6 +1921,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/ratings":
             return self.send_json(load_ratings())
+
+        if path == "/api/bookmarks":
+            album_id = re.sub(r"\D", "", (query.get("id") or [""])[0])
+            return self.send_json({"pages": load_bookmarks().get(album_id, [])})
 
         if path == "/api/album/job":
             key = (re.sub(r"\D", "", (query.get("id") or [""])[0]), (query.get("kind") or [""])[0])
@@ -2178,6 +2213,30 @@ class Handler(BaseHTTPRequestHandler):
                 save_ratings(ratings)
             return self.send_json({"scores": mine, "rating": rating_of(mine, ratings["criteria"])})
 
+        if path == "/api/bookmark":
+            # 加 / 去一个页面书签：{id, page, on}
+            body = self.body_json()
+            album_id = re.sub(r"\D", "", str(body.get("id", "")))
+            try:
+                page = int(body.get("page"))
+            except (TypeError, ValueError):
+                page = -1
+            if not album_id or page < 0 or not (DOWNLOAD_DIR / album_id).is_dir():
+                return self.send_json({"error": "参数不对"}, 400)
+            with _BOOKMARKS_LOCK:
+                data = load_bookmarks()
+                pages = set(data.get(album_id, []))
+                if body.get("on"):
+                    pages.add(page)
+                else:
+                    pages.discard(page)
+                if pages:
+                    data[album_id] = sorted(pages)
+                else:
+                    data.pop(album_id, None)
+                save_bookmarks(data)
+            return self.send_json({"pages": data.get(album_id, [])})
+
         if path == "/api/rating/criteria":
             criteria = _clean_names(self.body_json().get("criteria"))[:8]
             criteria = [c[:12] for c in criteria]
@@ -2274,6 +2333,10 @@ class Handler(BaseHTTPRequestHandler):
                 ratings = load_ratings()
                 if ratings["scores"].pop(album_dir.name, None) is not None:
                     save_ratings(ratings)
+            with _BOOKMARKS_LOCK:
+                marks = load_bookmarks()
+                if marks.pop(album_dir.name, None) is not None:
+                    save_bookmarks(marks)
             return self.send_json({"ok": True})
         self.send_json({"error": "not found"}, 404)
 

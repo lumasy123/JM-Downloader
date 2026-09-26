@@ -112,14 +112,15 @@
   </header>
   <p id="feed-hint" class="hint center"></p>
   <h2 class="section-title feed-title hidden" id="feed-updates-title">书架上的连载有更新</h2>
-  <div id="feed-updates" class="cards"></div>
+  <div id="feed-updates" class="frows"></div>
   <div class="seg" id="feed-seg">
     <button data-tab="authors">关注作者</button>
     <button data-tab="tags">关注标签</button>
   </div>
   <p id="feed-tab-hint" class="hint center"></p>
-  <div id="feed-authors" class="cards"></div>
-  <div id="feed-tags" class="cards"></div>
+  <div id="feed-empty"></div>
+  <div id="feed-authors" class="frows"></div>
+  <div id="feed-tags" class="frows"></div>
 </section>
 
 <!-- 我的 -->
@@ -350,6 +351,7 @@
   <header id="reader-top" class="reader-bar top">
     <button class="icon-btn" data-back aria-label="返回" title="返回"><span data-icon="back"></span></button>
     <span id="reader-title"></span>
+    <button id="btn-bookmark" class="icon-btn" aria-label="给这一页加书签" title="给这一页加书签"><span data-icon="bookmark"></span></button>
     <button id="btn-pages" class="icon-btn" aria-label="页面总览" title="页面总览"><span data-icon="grid"></span></button>
     <button id="btn-chapters" class="icon-btn hidden" aria-label="目录" title="目录"><span data-icon="list"></span></button>
     <button id="btn-mode" class="icon-btn" aria-label="阅读模式" title="阅读模式"><span data-icon="book"></span></button>
@@ -357,6 +359,12 @@
     <button id="btn-light" class="icon-btn" aria-label="亮度" title="亮度"><span data-icon="sun"></span></button>
     <button id="btn-rotate" class="icon-btn" aria-label="横屏/竖屏" title="横屏/竖屏"><span data-icon="rotate"></span></button>
   </header>
+  <div id="finish-rate" class="finish-rate hidden">
+    <span class="fr-text">读完啦，给这本打个分？</span>
+    <span class="fr-stars"></span>
+    <button class="fr-more">细分</button>
+    <button class="fr-close" aria-label="不打分"></button>
+  </div>
   <div id="light-panel" class="light-panel hidden">
     <span data-icon="sun" data-size="16"></span>
     <input id="light-slider" type="range" min="5" max="100" value="60" aria-label="亮度">

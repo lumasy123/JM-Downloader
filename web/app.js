@@ -33,6 +33,7 @@ const ICONS = {
   next: 'M9 6l6 6-6 6',
   bell: 'M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
   box: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
+  bookmark: 'M6 3h12v18l-6-4.5L6 21z',
   star: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z',
 };
 
@@ -198,7 +199,40 @@ function goBack() {
 
 let lastBackAt = 0;
 
+/* ---- 弹层（面板、分组抽屉、确认框、提示）打开时往历史里压一条：
+ * 安卓返回键先关最上面的弹层，而不是直接退页面、在书架首页时直接退出 App ---- */
+const OVERLAYS = ['#dialog', '#sheet', '#drawer', '#tip'];
+let overlayPushed = false;
+let skipPop = false;
+const overlayOpen = () => OVERLAYS.find((s) => !$(s).classList.contains('hidden'));
+function closeTopOverlay(sel) {
+  if (sel === '#dialog') $('#dialog [data-no]').click();
+  else if (sel === '#sheet') closeSheet();
+  else if (sel === '#drawer') closeDrawer();
+  else $(sel).classList.add('hidden');
+}
+const overlayWatch = new MutationObserver(() => {
+  const open = overlayOpen();
+  if (open && !overlayPushed) {
+    overlayPushed = true;
+    history.pushState({ ...(history.state || {}), overlay: true }, '');
+  } else if (!open && overlayPushed) {
+    // 用按钮关掉的：把刚才压进去的那条撤掉，不然要多按一次返回
+    overlayPushed = false;
+    skipPop = true;
+    history.back();
+  }
+});
+OVERLAYS.forEach((sel) => overlayWatch.observe($(sel), { attributes: true, attributeFilter: ['class'] }));
+
 window.addEventListener('popstate', (e) => {
+  if (skipPop) { skipPop = false; return; }
+  const open = overlayOpen();
+  if (open) {
+    overlayPushed = false;   // 历史已经退回去了，关掉就行
+    closeTopOverlay(open);
+    return;
+  }
   lastBackAt = Date.now();
   // 页面总览开着时按返回键：先关总览，别直接退出阅读器
   if (!$('#overview').classList.contains('hidden')) {
@@ -901,6 +935,7 @@ async function openDetail(id, push = true) {
       <button class="ghost icon-only" id="btn-delete" title="删除这本" aria-label="删除这本">${svg('trash', 20)}</button>
     </div>
     <div id="chapter-list"></div>
+    <div class="bm-list hidden" id="bm-list"></div>
     <button class="rating-btn hidden" id="btn-rating"></button>
     <div class="note-box">
       <textarea id="detail-note" rows="2" maxlength="2000" placeholder="写点笔记……（只存在这台设备上）"></textarea>
@@ -964,6 +999,23 @@ async function openDetail(id, push = true) {
   $('#btn-group').onclick = () => openGroupSheet(data.id, group);
   $('#btn-space').onclick = () => openSpaceSheet(book || { id: data.id, name: data.name });
   $('#btn-delete').onclick = () => removeAlbum(data.id, data.name);
+
+  // 书签：点一下直接跳到那一页
+  if (book) {
+    loadBookmarks(data.id).then((pages) => {
+      const box = $('#bm-list');
+      if (!box || !pages.length) return;
+      box.innerHTML = '<span class="bm-title">书签</span>';
+      for (const p of pages) {
+        const chip = document.createElement('button');
+        chip.className = 'tag';
+        chip.textContent = `第 ${p + 1} 页`;
+        chip.onclick = () => openReader(data.id, p);
+        box.appendChild(chip);
+      }
+      box.classList.remove('hidden');
+    });
+  }
 
   // 评分：只给书架上已下载的打；平时只是一个按钮，点了弹出明细
   const ratingBtn = $('#btn-rating');
@@ -1159,6 +1211,10 @@ let trackObserver = null;
 
 async function openReader(id, startIndex, push = true) {
   localStorage.setItem('jm-opens-' + id, String(openCount(id) + 1));
+  $('#finish-rate').classList.add('hidden');
+  loadBookmarks(id).then((pages) => {
+    if (reader.id === id) { reader.bookmarks = new Set(pages); paintBookmarkBtn(); }
+  });
   let data = detailData && detailData.id === id
     ? detailData
     : await api.get('/api/album?id=' + encodeURIComponent(id));
@@ -1170,7 +1226,7 @@ async function openReader(id, startIndex, push = true) {
   wrap._ratios = [];                      // 换书了，页宽重新统计
   wrap.style.removeProperty('--page-ratio');
   reader = {
-    id, imgs: [], srcs: [], index: 0, starts: [], names: [], chapter: -1,
+    id, imgs: [], srcs: [], index: 0, starts: [], names: [], chapter: -1, bookmarks: new Set(),
     title: data.name, mode: pref('jm-read-mode'), pageImg: null,
   };
 
@@ -1282,9 +1338,63 @@ function jumpTo(i) {
   unloadFar(i);
 }
 
+/* ---- 页面书签：阅读器顶栏的按钮加 / 去，详情页列出来，页面总览里标出来 ---- */
+async function loadBookmarks(id) {
+  const res = await api.get('/api/bookmarks?id=' + encodeURIComponent(id)).catch(() => ({}));
+  return res.pages || [];
+}
+function paintBookmarkBtn() {
+  const btn = $('#btn-bookmark');
+  const on = !!(reader.bookmarks && reader.bookmarks.has(reader.index));
+  btn.classList.toggle('on', on);
+  btn.title = on ? '去掉这一页的书签' : '给这一页加书签';
+  btn.setAttribute('aria-label', btn.title);
+}
+$('#btn-bookmark').onclick = async () => {
+  if (!shelfItems.some((b) => b.id === reader.id)) return toast('只能给书架上的本子加书签');
+  const page = reader.index;
+  const on = !reader.bookmarks.has(page);
+  const res = await api.post('/api/bookmark', { id: reader.id, page, on });
+  if (res.error) return toast(res.error);
+  reader.bookmarks = new Set(res.pages);
+  paintBookmarkBtn();
+  toast(on ? `第 ${page + 1} 页加了书签` : '书签去掉了');
+};
+
+/* ---- 读完顺手打分：翻到最后一页、这本还没打过分时，底下浮出一排星星 ---- */
+const finishRateShown = new Set();   // 这次打开 App 里弹过的，不再弹
+function maybeAskRating(i) {
+  const box = $('#finish-rate');
+  const book = shelfItems.find((b) => b.id === reader.id);
+  if (i < reader.srcs.length - 1 || !book || book.rating != null || finishRateShown.has(book.id)) return;
+  finishRateShown.add(book.id);
+  const stars = box.querySelector('.fr-stars');
+  stars.innerHTML = '';
+  for (let n = 1; n <= 5; n++) {
+    const b = document.createElement('button');
+    b.className = 'rstar';
+    b.innerHTML = svg('star', 24);
+    b.setAttribute('aria-label', `${n} 分`);
+    b.onclick = async () => {
+      // 一键打分：每个评分项都打成这个分，综合分就是它；想细分再点「细分」
+      if (!ratingCriteria.length) await loadCriteria();
+      for (const c of ratingCriteria) await setRating(book.id, c, n);
+      box.classList.add('hidden');
+      toast(`给《${book.name.slice(0, 12)}》打了 ${n} 分`);
+    };
+    stars.appendChild(b);
+  }
+  box.querySelector('.fr-more').onclick = () => { box.classList.add('hidden'); openRatingSheet(book, () => {}); };
+  box.querySelector('.fr-close').innerHTML = svg('close', 16);
+  box.querySelector('.fr-close').onclick = () => box.classList.add('hidden');
+  box.classList.remove('hidden');
+}
+
 function updateCounter(i) {
   reader.index = i;
   $('#reader-counter').textContent = `${i + 1} / ${reader.srcs.length}`;
+  paintBookmarkBtn();
+  maybeAskRating(i);
   const slider = $('#reader-slider');
   if (document.activeElement !== slider) slider.value = String(i + 1);
 
@@ -1356,7 +1466,8 @@ function openOverview() {
       grid.appendChild(head);
     }
     const item = document.createElement('div');
-    item.className = 'ov-item' + (k === reader.index ? ' current' : '');
+    item.className = 'ov-item' + (k === reader.index ? ' current' : '')
+      + (reader.bookmarks && reader.bookmarks.has(k) ? ' bm' : '');
     item.innerHTML = '<img loading="lazy" alt=""><span></span>';
     item.querySelector('img').src = src.replace('/img/', '/pthumb/');   // 服务端生成的小图
     item.querySelector('span').textContent = k + 1;
