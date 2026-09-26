@@ -110,8 +110,9 @@ python deploy.py
 界面资源的版本号由文件内容算出来，改了自动变，不会出现 WebView 拿旧缓存的问题。
 
 构建工具链装在 `D:\androidbuild`（JDK 21、Android SDK 34、Gradle 8.7、
-Python 3.11），安卓工程在 `D:\androidbuild\jmapp`。安卓外壳工程（Chaquopy + WebView）
-目前不在这个仓库里，这里只有服务端和界面；直接用的话装 Releases 里的 APK 就行。
+Python 3.11），安卓外壳工程（Chaquopy + WebView）在 `android/`。`server.py` 和 `web/`
+由 `deploy.py` 每次同步进去，工程里不重复存。在别的电脑上构建，要改 `deploy.py` 开头的工具链路径、
+`android/app/build.gradle` 里的 `buildPython`，并新建 `android/local.properties` 写上 `sdk.dir`。
 
 ### 安卓版的两个特殊处理
 

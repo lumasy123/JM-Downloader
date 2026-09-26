@@ -18,6 +18,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# 安卓外壳工程（Chaquopy + WebView）的源码在仓库的 android/ 里。
+# Gradle 不支持含中文的工程路径（仓库在「JM漫画下载器」下），所以每次先镜像到纯英文的构建目录再编译
+ANDROID_SRC = ROOT / "android"
 ANDROID = Path(r"D:\androidbuild\jmapp")
 APP_MAIN = ANDROID / "app" / "src" / "main"
 
@@ -52,6 +55,7 @@ def sync() -> str:
     省得每次手动加一，也避免 WebView 拿旧缓存。
     """
     step("同步代码")
+    mirror_android()
     py_dir = APP_MAIN / "python"
     py_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "server.py", py_dir / "server.py")
@@ -80,6 +84,20 @@ def sync() -> str:
 
     print(f"  server.py + web/（{len(list(web_dst.iterdir()))} 个文件），资源版本 {version}")
     return version
+
+
+def mirror_android() -> None:
+    """android/ → 构建目录：app/src 整个重建（删掉的资源也跟着删），Gradle 配置文件逐个覆盖。
+    构建目录里的 build/、.gradle/ 缓存和 local.properties 保留，增量编译照样快。"""
+    ANDROID.mkdir(parents=True, exist_ok=True)
+    src_dir = ANDROID / "app" / "src"
+    if src_dir.exists():
+        shutil.rmtree(src_dir)
+    shutil.copytree(ANDROID_SRC / "app" / "src", src_dir)
+    for rel in ("build.gradle", "settings.gradle", "gradle.properties", "app/build.gradle"):
+        shutil.copy2(ANDROID_SRC / rel, ANDROID / rel)
+    if (ANDROID_SRC / "local.properties").exists():
+        shutil.copy2(ANDROID_SRC / "local.properties", ANDROID / "local.properties")
 
 
 # ---------------------------------------------------------------- 构建

@@ -2,9 +2,10 @@
 
   python make_icons.py
 
-网页：../web/icon-192.png、icon-512.png、icon-maskable-512.png、apple-touch-icon.png
-安卓：D:\\androidbuild\\jmapp 里的 mipmap-*/ic_launcher*.png，
-      自适应图标的背景色写进 values/ic_launcher_background.xml（取原图角上的天蓝色）
+网页：../web/icon-192.png、icon-512.png（四角小圆角）、icon-maskable-512.png、apple-touch-icon.png（方的，系统自己裁）
+安卓：../android/app/src/main/res/mipmap-*/ic_launcher*.png，四角小圆角。
+      不用自适应图标：那样形状由桌面决定（常被裁成圆形），和电脑版、安装包的圆角方图对不上
+电脑版的 exe、安装包图标由 desktop/build.py 从 icon-512.png 生成，所以也是同一个圆角图
 """
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from PIL import Image, ImageDraw
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE.parent / 'web'
-RES = Path(r'D:\androidbuild\jmapp\app\src\main\res')
+RES = HERE.parent / 'android' / 'app' / 'src' / 'main' / 'res'
+# 圆角半径占边长的比例：小圆角
+RADIUS = 0.12
 
 src = Image.open(HERE / 'icon_src.webp').convert('RGBA')
 # 背景色：四个角取平均，自适应图标和留边的地方都用它，接缝看不出来
@@ -32,7 +35,7 @@ def compose(size, scale=1.0, shape=None):
         if shape == 'circle':
             d.ellipse((0, 0, ss - 1, ss - 1), fill=255)
         else:
-            d.rounded_rectangle((0, 0, ss - 1, ss - 1), radius=ss * 0.2, fill=255)
+            d.rounded_rectangle((0, 0, ss - 1, ss - 1), radius=ss * RADIUS, fill=255)
         out = Image.new('RGBA', (ss, ss), (0, 0, 0, 0))
         out.paste(canvas, (0, 0), mask)
         canvas = out
@@ -40,27 +43,25 @@ def compose(size, scale=1.0, shape=None):
 
 
 # ---- 网页
-compose(192).save(WEB / 'icon-192.png')
-compose(512).save(WEB / 'icon-512.png')
+compose(192, shape='rounded').save(WEB / 'icon-192.png')
+compose(512, shape='rounded').save(WEB / 'icon-512.png')
 # maskable：系统会裁成圆形或圆角，整张缩一点，牌子边角不被裁掉
 compose(512, 0.84).save(WEB / 'icon-maskable-512.png')
 compose(180).save(WEB / 'apple-touch-icon.png')
 
-# ---- 安卓
+# ---- 安卓：只用圆角方图（旧的自适应图标配置删掉）
 DENS = {'mdpi': 1, 'hdpi': 1.5, 'xhdpi': 2, 'xxhdpi': 3, 'xxxhdpi': 4}
 for name, k in DENS.items():
     d = RES / f'mipmap-{name}'
     d.mkdir(parents=True, exist_ok=True)
-    # 自适应图标前景：108dp 画布，桌面只露出中间 72dp；图放到 76dp，只裁掉一圈天蓝色的边，人物更大
-    compose(round(108 * k), 76 / 108).save(d / 'ic_launcher_foreground.png')
-    # 旧系统（Android 8 以下）直接用的整张图标
-    compose(round(48 * k), shape='rounded').save(d / 'ic_launcher.png')
-    compose(round(48 * k), shape='circle').save(d / 'ic_launcher_round.png')
-
-hexbg = '#%02X%02X%02X' % BG[:3]
-(RES / 'values' / 'ic_launcher_background.xml').write_text(f'''<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="ic_launcher_background">{hexbg}</color>
-</resources>
-''', 'utf-8')
-print('ok', hexbg)
+    img = compose(round(48 * k), shape='rounded')
+    img.save(d / 'ic_launcher.png')
+    img.save(d / 'ic_launcher_round.png')   # 清单里 roundIcon 也指向同一个圆角图
+    (d / 'ic_launcher_foreground.png').unlink(missing_ok=True)
+for old in [RES / 'mipmap-anydpi-v26' / 'ic_launcher.xml', RES / 'mipmap-anydpi-v26' / 'ic_launcher_round.xml',
+            RES / 'values' / 'ic_launcher_background.xml']:
+    old.unlink(missing_ok=True)
+anydpi = RES / 'mipmap-anydpi-v26'
+if anydpi.exists() and not any(anydpi.iterdir()):
+    anydpi.rmdir()
+print('ok')
