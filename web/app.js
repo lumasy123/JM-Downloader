@@ -393,10 +393,18 @@ let shelfQuery = '';
 let shelfFilter = 'all';
 
 const SHELF_FILTERS = [
-  ['all', '全部'], ['reading', '读到一半'], ['unread', '未读'],
+  ['all', '全部'], ['reading', '读到一半'], ['idle', '未读 / 长期未看'],
   ['finished', '已读完'], ['partial', '未下完'],
   ['rated4', '4 分以上'], ['rated3', '3 分以上'], ['unrated', '未评分'],
 ];
+const SHELF_SORTS = [
+  ['added', '最近添加'], ['read', '最近阅读'], ['name', '标题'],
+  ['pages', '页数'], ['rating', '评分'], ['opens', '点开最多'],
+];
+
+// 一个月以上没看：最后一次打开（从没打开过就按下载时间）在 30 天前
+const IDLE_MS = 30 * 86400000;
+const isIdle = (b) => Date.now() - Math.max(lastRead(b.id), (b.added_at || 0) * 1000) > IDLE_MS;
 
 function readState(b) {
   const pos = getProgress(b.id);
@@ -410,6 +418,7 @@ function matchFilter(b, f) {
   if (f === 'rated4') return b.rating != null && b.rating >= 4;
   if (f === 'rated3') return b.rating != null && b.rating >= 3;
   if (f === 'unrated') return b.rating == null;
+  if (f === 'idle') return readState(b) === 'unread' || isIdle(b);
   return readState(b) === f;
 }
 let shelfSort = localStorage.getItem('jm-shelf-sort') || 'added';
@@ -610,21 +619,84 @@ function buildBookCard(book) {
     return el;
 }
 
+// 顶上的「筛选」按钮：没筛选时写「筛选」，筛选了写筛的是什么；
+// 筛选中时下面一条显示当前条件（点 × 取消），「未读 / 长期未看」里还能一键清理
 function renderFilters() {
+  const btn = $('#shelf-filter-btn');
+  const label = (SHELF_FILTERS.find(([k]) => k === shelfFilter) || [])[1];
+  btn.textContent = shelfFilter === 'all' ? '筛选' : label.replace(' / 长期未看', '');
+  btn.classList.toggle('on', shelfFilter !== 'all');
+  btn.title = `筛选：${label || '全部'} · 排序：${(SHELF_SORTS.find(([k]) => k === shelfSort) || [])[1]}`;
+
   const bar = $('#shelf-filters');
   bar.innerHTML = '';
-  const live = liveItems();
-  if (!live.length) return;
-  for (const [key, label] of SHELF_FILTERS) {
-    const n = live.filter((b) => matchFilter(b, key)).length;
-    // 数量为 0 的筛选没意义，不占地方（当前选中的除外）
-    if (key !== 'all' && !n && shelfFilter !== key) continue;
-    const chip = document.createElement('button');
-    chip.className = 'chip' + (shelfFilter === key ? ' active' : '');
-    chip.textContent = key === 'all' ? label : `${label} ${n}`;
-    chip.onclick = () => { shelfFilter = key; renderShelf(); };
-    bar.appendChild(chip);
+  bar.classList.toggle('hidden', shelfFilter === 'all' || !liveItems().length);
+  if (shelfFilter === 'all') return;
+  const chip = document.createElement('button');
+  chip.className = 'chip active';
+  chip.innerHTML = `<span></span>${svg('close', 14)}`;
+  chip.querySelector('span').textContent = label;
+  chip.title = '取消筛选';
+  chip.onclick = () => { shelfFilter = 'all'; renderShelf(); };
+  bar.appendChild(chip);
+  if (shelfFilter === 'idle') {
+    const idle = liveItems().filter(isIdle);
+    if (idle.length) {
+      const clean = document.createElement('button');
+      clean.className = 'ghost clean-idle';
+      clean.textContent = `清理一个月以上没看的 ${idle.length} 本`;
+      clean.onclick = () => cleanIdle(idle);
+      bar.appendChild(clean);
+    }
   }
+}
+
+// 一键清理一个月以上没看的：确认后删掉（6 秒内还能撤销）
+async function cleanIdle(books) {
+  const size = books.reduce((n, b) => n + (b.size || 0), 0);
+  if (!await confirmDialog({
+    title: `删除 ${books.length} 本一个月以上没看的？`,
+    message: books.slice(0, 5).map((b) => `《${b.name.slice(0, 24)}》`).join('\n')
+      + (books.length > 5 ? `\n……等 ${books.length} 本` : '')
+      + (size ? `\n共 ${formatSize(size)}` : '') + '\n本地文件会一起删掉，删完 6 秒内可以撤销。',
+    ok: '删除', danger: true,
+  })) return;
+  softDelete(books.map((b) => b.id), `已删除 ${books.length} 本一个月以上没看的`);
+}
+
+// 筛选和排序放在一个弹窗里，点了马上生效
+function openFilterSheet() {
+  $('#sheet-title').textContent = '筛选和排序';
+  const body = $('#sheet-body');
+  body.innerHTML = '';
+  const live = liveItems();
+  const group = (title, entries, isOn, onPick) => {
+    const h = document.createElement('p');
+    h.className = 'pick-title';
+    h.textContent = title;
+    const box = document.createElement('div');
+    box.className = 'pickchips';
+    for (const [key, label, n] of entries) {
+      const chip = document.createElement('button');
+      chip.className = 'pickchip' + (isOn(key) ? ' on' : '');
+      chip.textContent = n == null ? label : `${label} ${n}`;
+      chip.onclick = () => { onPick(key); openFilterSheet(); };
+      box.appendChild(chip);
+    }
+    body.append(h, box);
+  };
+  group('筛选', SHELF_FILTERS.map(([k, label]) => [k, label, k === 'all' ? null : live.filter((b) => matchFilter(b, k)).length]),
+    (k) => k === shelfFilter, (k) => { shelfFilter = k; renderShelf(); });
+  group('排序', SHELF_SORTS, (k) => k === shelfSort, (k) => {
+    shelfSort = k;
+    localStorage.setItem('jm-shelf-sort', k);
+    renderShelf();
+  });
+  const tip = document.createElement('p');
+  tip.className = 'hint';
+  tip.textContent = '「未读 / 长期未看」：没打开过的，加上一个月以上没打开过的；选中后书架上方可以一键清理后者。';
+  body.appendChild(tip);
+  $('#sheet').classList.remove('hidden');
 }
 
 // 书架最上面：最近读过、还没读完的那一本，点一下直接回到上次的位置
@@ -831,7 +903,7 @@ function makeCopyable(el, text, guard) {
 // 这些操作界面上没有显眼的按钮，不说就发现不了；每条只提示一次
 const TIPS = {
   shelf: '长按一本可以多选：批量分组、删除、导出号单。在书架顶部往下拉可以刷新。',
-  detail: '点作者名可以复制，方便去搜这个作者的其他作品。',
+  detail: '点作者名可以复制、搜 TA 的其他作品、收藏或拉黑。',
   tagblock: '点「拉黑」可以挑这一本、作者、标签一起拉黑；点「收藏」可以收藏喜欢的作者和标签，之后带这些的本子搜索时排在前面。',
   download: '直接输入 JM 号就能下载，多个号用空格隔开；也可以按标题、作者、标签搜索。',
   'reader-scroll': '双指缩放，双击放大 / 还原，点一下显示或隐藏菜单。右上角可以切换成翻页模式。',
@@ -997,7 +1069,9 @@ async function openDetail(id, push = true) {
   const authorEl = body.querySelector('.author');
   if (data.author) {
     authorEl.textContent = data.author;
-    makeCopyable(authorEl, data.author);
+    authorEl.classList.add('copyable');
+    authorEl.title = '复制、搜其他作品、收藏或拉黑';
+    authorEl.onclick = () => openAuthorMenu(data);
   } else {
     authorEl.remove();
   }
@@ -1093,22 +1167,53 @@ async function openDetail(id, push = true) {
 
   switchView('detail', false);
   if (push) history.pushState({ view: 'detail', album: id }, '');
-  if (data.author) {
-    // 下面放不下几本，直接跳到下载页按作者搜，顺手把作者名复制了
-    const more = document.createElement('button');
-    more.className = 'ghost more-btn';
-    more.textContent = `搜 ${data.author} 的其他作品`;
-    more.onclick = async () => {
-      await copyText(data.author);
-      switchView('download');
-      $('#search-input').value = data.author;
-      setKind('author');
-      doSearch(1);
-      toast(`已复制「${data.author}」，按作者搜索`);
-    };
-    $('#chapter-list').before(more);
-    showTip('detail');
-  }
+  if (data.author) showTip('detail');
+}
+
+// 详情页点作者名：复制、搜 TA 的其他作品、收藏 / 拉黑（已经是的就变成取消）
+function openAuthorMenu(data) {
+  const a = data.author;
+  $('#sheet-title').textContent = a;
+  const body = $('#sheet-body');
+  body.innerHTML = '';
+  const addRow = (icon, title, sub, onClick, cls = '') => {
+    const row = document.createElement('button');
+    row.className = 'share-item ' + cls;
+    row.innerHTML = `${svg(icon, 20)}<span class="name"></span>`;
+    const name = row.querySelector('.name');
+    name.textContent = title;
+    if (sub) {
+      const s = document.createElement('small');
+      s.textContent = sub;
+      name.appendChild(s);
+    }
+    row.onclick = () => { closeSheet(); onClick(); };
+    body.appendChild(row);
+  };
+  addRow('edit', '复制作者名', '', async () => {
+    toast((await copyText(a)) ? `已复制「${a}」` : '复制失败');
+  });
+  addRow('search', '搜 TA 的其他作品', '到下载页按作者搜索', () => {
+    switchView('download');
+    $('#search-input').value = a;
+    setKind('author');
+    doSearch(1);
+  });
+  const fav = hasAuthor(favAuthorSet, a);
+  const black = hasAuthor(blockedAuthorSet, a);
+  addRow('heart', fav ? '取消收藏' : '收藏作者', fav ? '' : '搜索时排前面，出新本会出现在「动态」里', async () => {
+    await setNames('fav', 'authors', fav ? [] : [a], fav ? [a] : [], { noAsk: true });
+    toast(fav ? `已取消收藏「${a}」` : black ? `已收藏「${a}」，并移出黑名单` : `已收藏「${a}」`);
+  });
+  addRow('close', black ? '取消拉黑' : '拉黑作者', black ? '' : '之后搜索时不显示 TA 的本子（书架上的不受影响）', async () => {
+    if (!black && !await confirmDialog({
+      title: `拉黑「${a}」？`, message: fav ? '会同时取消收藏。' : '之后搜索时不再显示 TA 的本子。',
+      ok: '拉黑', danger: true,
+    })) return;
+    await setNames('black', 'authors', black ? [] : [a], black ? [a] : [], { noAsk: true });
+    toast(black ? `已取消拉黑「${a}」` : `已拉黑「${a}」`);
+  }, 'danger');
+  $('#sheet').classList.remove('hidden');
 }
 
 // 详情页底部：这个作者的其他作品，横向一排。需要联网，失败就不显示
@@ -2225,8 +2330,7 @@ applySearchMode();
 
 function setKind(kind) {
   searchKind = kind;
-  $$('#search-kinds .chip').forEach((c) =>
-    c.classList.toggle('active', c.dataset.kind === kind));
+  $('#search-kind').value = kind;
 }
 
 // 纯数字（可以带 JM 前缀，多个用空格或逗号隔开）就当 JM 号处理
@@ -2476,8 +2580,9 @@ function showPager(res) {
 /* ----------------------------------------------------------------- 绑定 */
 $('#btn-search').onclick = () => doSearch();
 $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
-$$('#search-kinds .chip').forEach((c) => {
-  c.onclick = () => { setKind(c.dataset.kind); if (searchQuery) doSearch(); };
+$('#search-kind').addEventListener('change', (e) => {
+  setKind(e.target.value);
+  if (searchQuery) doSearch();
 });
 $('#show-blocked').checked = pref('jm-show-blocked') === '1';
 $('#show-blocked').addEventListener('change', (e) => {
@@ -2786,12 +2891,7 @@ $('#backup-file').addEventListener('change', async (e) => {
   if (file) await importBackup(file);
 });
 
-$('#shelf-sort').value = shelfSort;
-$('#shelf-sort').addEventListener('change', (e) => {
-  shelfSort = e.target.value;
-  localStorage.setItem('jm-shelf-sort', shelfSort);
-  renderShelf();
-});
+$('#shelf-filter-btn').onclick = openFilterSheet;
 $('#shelf-search').addEventListener('input', (e) => {
   shelfQuery = e.target.value;
   renderShelf();

@@ -2254,3 +2254,43 @@ body.masked .mw-all::after { transform: none; }
 .share-item .name { flex: 1; min-width: 0; }
 .share-item small { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
 .share-item .arrow { color: var(--muted); }
+
+/* ---------- 书架：筛选按钮、筛选条 ---------- */
+.shelf-tools .filter-btn {
+  flex: none;
+  max-width: 96px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.shelf-tools .filter-btn.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 16px 12px; }
+.filter-bar.hidden { display: none; }
+.filter-bar .chip { flex: none; display: inline-flex; align-items: center; gap: 4px; margin: 0; height: 32px; padding: 0 12px; border-radius: 16px; }
+.filter-bar .chip svg { width: 14px; height: 14px; }
+.filter-bar .clean-idle { height: 32px; padding: 0 12px; border-radius: 16px; font-size: 12.5px; color: #e05656; border: 1px solid #e05656; background: none; cursor: pointer; }
+#dialog p { white-space: pre-line; }
+
+/* ---------- 下载页：搜索类型下拉框 ---------- */
+.input-row #search-kind {
+  flex: none;
+  width: 64px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.input-row #search-kind + input { min-width: 0; }
+
+/* 作者菜单里的拉黑一行用红色 */
+.share-item.danger, .share-item.danger > svg { color: #e05656; }

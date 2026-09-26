@@ -34,16 +34,9 @@
   <div id="shelf-tools" class="shelf-tools">
     <input id="shelf-search" type="search" placeholder="搜标题 / 作者 / JM号 / 标签，空格分词，-词 排除">
     <button id="shelf-mode" class="mode-toggle" data-search-mode></button>
-    <select id="shelf-sort" aria-label="排序">
-      <option value="added">最近添加</option>
-      <option value="read">最近阅读</option>
-      <option value="name">标题</option>
-      <option value="pages">页数</option>
-      <option value="rating">评分</option>
-      <option value="opens">点开最多</option>
-    </select>
+    <button id="shelf-filter-btn" class="filter-btn" type="button">筛选</button>
   </div>
-  <div id="shelf-filters" class="chips scroll"></div>
+  <div id="shelf-filters" class="filter-bar hidden"></div>
   <div id="continue" class="continue hidden"></div>
   <div id="shelf-grid" class="grid"></div>
   <div id="shelf-nomatch" class="hint center hidden">没有匹配的漫画</div>
@@ -60,17 +53,17 @@
 
   <div class="panel">
     <div class="input-row">
-      <input id="search-input" type="search" placeholder="搜索标题 / 作者 / 标签，或输入 JM 号">
+      <select id="search-kind" aria-label="搜索类型">
+        <option value="site">综合</option>
+        <option value="work">标题</option>
+        <option value="author">作者</option>
+        <option value="tag">标签</option>
+      </select>
+      <input id="search-input" type="search" placeholder="关键字或 JM 号">
       <button id="search-mode" class="mode-toggle" data-search-mode></button>
       <button id="btn-search" class="ghost">搜索</button>
     </div>
     <p class="hint">纯数字按 JM 号直接下载；多个关键字用空格隔开，词前加 - 表示排除，例如：校服 -NTR</p>
-    <div class="chips" id="search-kinds">
-      <button class="chip active" data-kind="site">综合</button>
-      <button class="chip" data-kind="work">标题</button>
-      <button class="chip" data-kind="author">作者</button>
-      <button class="chip" data-kind="tag">标签</button>
-    </div>
     <div class="explore-row" id="explore-row">
       <span class="explore-label">探索</span>
       <button class="explore-btn" type="button" data-mode="tags">按收藏标签</button>
