@@ -4,7 +4,7 @@
 
 **安卓安装包**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载最新的 `.apk`，装上就能用，不需要电脑。
 
-**Windows 电脑版**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载 `JM下载器-安装包-x.x.x.exe`，
+**Windows 电脑版**：到 [Releases](https://github.com/lumasy123/JM-Downloader/releases) 下载 `JM-Downloader-Setup-x.x.x.exe`，
 双击安装（默认装到当前用户，不需要管理员权限），开始菜单 / 桌面上就有「JM下载器」，功能和安卓版一样。
 
 - 书架：列表 / 封面墙，分组、多标准评分（按平均分排序、筛选）、每本可写笔记、记点开次数
