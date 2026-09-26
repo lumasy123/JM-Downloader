@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.jmshelf'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.jmshelf"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // arm 两个给真机，x86_64 给电脑模拟器（MuMu/雷电/夜神都是 x86_64，
+        // 少了它会因为加载不了 libpython 而一开就闪退）
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
+
+        python {
+            version "3.11"
+            buildPython "D:/androidbuild/py311/python.exe"
+
+            pip {
+                // jmcomic 声明依赖 curl_cffi，那是原生库、安卓没有轮子。
+                // 所以全局关掉依赖解析，下面把需要的包一个不落地列出来；
+                // src/main/python/curl_cffi 放了个桩模块让顶层 import 能过。
+                options "--no-deps"
+
+                install "jmcomic==2.7.7"
+                install "commonX==0.6.40"
+                install "PyYAML"
+                install "pycryptodome"
+                install "Pillow"
+
+                // Pillow 和 PyYAML 的安卓轮子依赖这几个由 Chaquopy 单独打包的
+                // 原生库。上面关了依赖解析，所以必须手动补，否则运行时会报
+                // dlopen failed: library "libjpeg_chaquopy.so" not found
+                install "chaquopy-libjpeg"
+                install "chaquopy-freetype"
+                install "chaquopy-libyaml"
+
+                // requests 及其依赖（--no-deps 之后必须手动补齐）
+                install "requests"
+                install "certifi"
+                install "charset-normalizer"
+                install "idna"
+                install "urllib3"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug   // 自用，直接沿用调试签名
+        }
+    }
+
+    // 自用打包，不跑 release lint，省时间也避开 lint 自身的环境问题
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions { jvmTarget = '1.8' }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+}

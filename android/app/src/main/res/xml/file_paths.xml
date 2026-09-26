@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 只开放备份目录，其余文件不对外共享 -->
+    <external-files-path name="backups" path="backups/" />
+</paths>
