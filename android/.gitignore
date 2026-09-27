@@ -10,4 +10,4 @@ local.properties
 # 由主仓库（JM下载器）的 deploy.py 每次同步进来的副本，不在这里重复存
 app/src/main/assets/web/
 app/src/main/python/server.py
-app/src/main/python/jmsync.py
+app/src/main/python/jmlan.py

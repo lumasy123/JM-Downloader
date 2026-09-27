@@ -657,9 +657,19 @@ function openLocalImportSheet() {
 }
 $('#mine-local-import').onclick = openLocalImportSheet;
 
-/* ---- 多设备同步（用户自己的坚果云）----
- * 服务端（jmsync.py）在后台定时同步；这里负责设置界面、显示状态、收到书时提示 */
-let syncState = null;
+// 发书、收书的进度：每 0.7 秒问一次，用提示条显示
+async function trackJob(job) {
+  const label = job.kind === 'lan' ? '发送' : '传输';
+  for (;;) {
+    const j = await api.get('/api/xfer?id=' + job.id).catch(() => null);
+    if (!j || j.state === 'none') return;
+    if (j.state === 'error') return toast(`${label}失败：${j.error}`);
+    if (j.state === 'done') return toast(`《${j.name.slice(0, 16)}》${j.stage}`);
+    const pct = j.total ? Math.floor((j.done / j.total) * 100) : 0;
+    toast(`${j.stage}中 ${pct}%：《${j.name.slice(0, 12)}》`);
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
 
 function sheetField(body, label, { value = '', placeholder = '', type = 'text', hint = '' } = {}) {
   const h = document.createElement('p');
@@ -679,194 +689,6 @@ function sheetField(body, label, { value = '', placeholder = '', type = 'text', 
     body.appendChild(p);
   }
   return input;
-}
-
-function paintSyncMenu(st) {
-  const el = $('#mine-sync-status');
-  if (!el || !st) return;
-  el.textContent = !st.enabled ? '用自己的坚果云'
-    : st.error ? '同步出错' : st.last_ok ? `已同步 · ${timeAgo(st.last_ok * 1000)}` : '同步中……';
-}
-
-async function refreshSync() {
-  const st = await api.get('/api/sync/status').catch(() => null);
-  if (!st) return null;
-  syncState = st;
-  paintSyncMenu(st);
-  // 从别的设备收到的书
-  for (const r of st.received || []) {
-    toast(r.skipped ? `《${r.name}》书架上已经有了` : `收到《${r.name}》${r.from ? '（来自' + r.from + '）' : ''}`);
-  }
-  if ((st.received || []).length) loadShelf();
-  return st;
-}
-// 开着同步时每分钟看一眼（收书、更新「已同步 · 几分钟前」）
-setInterval(() => { if (syncState && syncState.enabled) refreshSync(); }, 60000);
-setTimeout(refreshSync, 3000);
-
-async function openSyncSheet(edit = false) {
-  const st = await refreshSync();
-  if (!st) return toast('读不到同步状态');
-  $('#sheet-title').textContent = '多设备同步';
-  const body = $('#sheet-body');
-  body.innerHTML = '';
-  const tip = document.createElement('p');
-  tip.className = 'hint';
-  tip.textContent = '同步收藏 / 反感 / 拉黑、分组、评分和笔记、书单；书也能「发送到我的其他设备」。'
-    + '数据放在你自己的坚果云里，上传前用「同步密码」加密，网盘上看不到内容。几台设备填同一个坚果云账号和同一个同步密码就能互通。';
-  body.appendChild(tip);
-
-  if (!st.enabled || edit) {
-    const user = sheetField(body, '坚果云账号', { value: st.user, placeholder: '登录坚果云用的邮箱或手机号' });
-    const pass = sheetField(body, '应用密码', {
-      type: 'password', placeholder: st.has_password ? '已保存，不改就留空' : '不是登录密码',
-      hint: '在坚果云网页版：右上角账户名 → 账户信息 → 安全选项 → 第三方应用管理 → 添加应用，生成一串应用密码填到这里。',
-    });
-    const phrase = sheetField(body, '同步密码', {
-      type: 'password', placeholder: st.has_password ? '已保存，不改就留空' : '自己设一个，至少 6 位',
-      hint: '用来加密，所有设备要填一样的；忘了就只能在所有设备上换一个新的重新同步。',
-    });
-    const name = sheetField(body, '这台设备叫', { value: st.device_name, placeholder: '比如：手机、电脑' });
-    const url = sheetField(body, 'WebDAV 地址（用坚果云不用改）', { value: st.url });
-    const row = document.createElement('div');
-    row.className = 'sheet-actions';
-    const ok = document.createElement('button');
-    ok.className = 'primary';
-    ok.textContent = '保存并同步';
-    ok.onclick = async () => {
-      ok.disabled = true;
-      ok.textContent = '连接中……';
-      const res = await api.post('/api/sync/config', {
-        user: user.value.trim(), password: pass.value.trim(), passphrase: phrase.value,
-        device_name: name.value.trim(), url: url.value.trim(),
-      });
-      ok.disabled = false;
-      ok.textContent = '保存并同步';
-      if (res.error) return toast(res.error);
-      toast('同步好了');
-      await loadShelf();
-      openSyncSheet();
-    };
-    row.appendChild(ok);
-    body.appendChild(row);
-    $('#sheet').classList.remove('hidden');
-    return;
-  }
-
-  const line = document.createElement('p');
-  line.className = 'sync-line' + (st.error ? ' bad' : '');
-  line.textContent = st.error ? `出错了：${st.error}`
-    : st.last_ok ? `上次同步：${timeAgo(st.last_ok * 1000)}（${st.user}）` : '正在同步……';
-  body.appendChild(line);
-
-  const h = document.createElement('p');
-  h.className = 'pick-title';
-  h.textContent = '已连上的设备';
-  body.appendChild(h);
-  for (const d of st.devices) {
-    const row = document.createElement('div');
-    row.className = 'sheet-item';
-    row.innerHTML = '<span class="name"></span>';
-    row.querySelector('.name').textContent = d.name + (d.me ? '（这台）' : '');
-    const sub = document.createElement('div');
-    sub.className = 'sub';
-    sub.textContent = `上次同步：${timeAgo(d.seen * 1000)}`;
-    row.querySelector('.name').appendChild(sub);
-    body.appendChild(row);
-  }
-
-  if (st.missing.length) {
-    const mh = document.createElement('p');
-    mh.className = 'pick-title';
-    mh.textContent = `其他设备上有 ${st.missing.length} 本这里没有`;
-    const list = document.createElement('p');
-    list.className = 'hint';
-    list.textContent = st.missing.slice(0, 6).map((m) => `《${m.name.slice(0, 20)}》`).join('')
-      + (st.missing.length > 6 ? ` 等 ${st.missing.length} 本` : '');
-    const row = document.createElement('div');
-    row.className = 'sheet-actions';
-    const dl = document.createElement('button');
-    dl.className = 'primary';
-    dl.textContent = '全部下载';
-    dl.onclick = async () => {
-      for (const m of st.missing) await api.post('/api/download', { id: m.id });
-      toast(`已加入 ${st.missing.length} 本到下载队列`);
-      pollTasks();
-      openSyncSheet();
-    };
-    const ig = document.createElement('button');
-    ig.className = 'ghost';
-    ig.textContent = '不用了';
-    ig.onclick = async () => {
-      await api.post('/api/sync/ignore', { ids: st.missing.map((m) => m.id) });
-      openSyncSheet();
-    };
-    row.append(ig, dl);
-    body.append(mh, list, row);
-  }
-
-  const row = document.createElement('div');
-  row.className = 'sheet-actions';
-  const now = document.createElement('button');
-  now.className = 'primary';
-  now.textContent = '立即同步';
-  now.onclick = async () => {
-    now.disabled = true;
-    now.textContent = '同步中……';
-    const res = await api.post('/api/sync/now', {});
-    if (res.error) toast(res.error); else toast('同步好了');
-    await loadShelf();
-    openSyncSheet();
-  };
-  const set = document.createElement('button');
-  set.className = 'ghost';
-  set.textContent = '修改设置';
-  set.onclick = () => openSyncSheet(true);
-  const off = document.createElement('button');
-  off.className = 'ghost';
-  off.textContent = '关闭同步';
-  off.onclick = async () => {
-    if (!await confirmDialog({ title: '关闭同步？', message: '这台设备不再和云端同步，本机的数据都保留。以后可以再打开。', ok: '关闭' })) return;
-    await api.post('/api/sync/disable', {});
-    await refreshSync();
-    openSyncSheet();
-  };
-  row.append(off, set, now);
-  body.appendChild(row);
-  $('#sheet').classList.remove('hidden');
-}
-$('#mine-sync').onclick = () => openSyncSheet();
-
-// 发书、收书的进度：每 0.7 秒问一次，用提示条显示
-async function trackJob(job) {
-  const label = { cloud: '发送', lan: '发送', receive: '接收' }[job.kind] || '传输';
-  for (;;) {
-    const j = await api.get('/api/xfer?id=' + job.id).catch(() => null);
-    if (!j || j.state === 'none') return;
-    if (j.state === 'error') return toast(`${label}失败：${j.error}`);
-    if (j.state === 'done') return toast(`《${j.name.slice(0, 16)}》${j.stage}`);
-    const pct = j.total ? Math.floor((j.done / j.total) * 100) : 0;
-    toast(`${j.stage}中 ${pct}%：《${j.name.slice(0, 12)}》`);
-    await new Promise((r) => setTimeout(r, 700));
-  }
-}
-
-async function sendToDevice(book) {
-  const st = await refreshSync();
-  if (!st || !st.enabled) {
-    toast('先在「我的 → 多设备同步」里填好坚果云');
-    return openSyncSheet();
-  }
-  const others = st.devices.filter((d) => !d.me);
-  if (!others.length) return toast('还没有别的设备连上：在另一台设备上也开启同步（同一个坚果云账号和同步密码）');
-  const to = others.length === 1 ? others[0] : await choiceDialog({
-    title: '发送到哪台设备？', message: `《${book.name}》`,
-    choices: others.map((d) => ({ label: d.name, value: d })),
-  });
-  if (!to) return;
-  const job = await api.post('/api/sync/send', { id: book.id, to: to.id });
-  if (job.error) return toast(job.error);
-  trackJob(job);
 }
 
 /* ---- 局域网传书：接收方开一个临时端口，显示地址和配对码；发送方填进去直接传 ---- */

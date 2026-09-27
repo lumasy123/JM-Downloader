@@ -2314,13 +2314,26 @@ button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   background: var(--surface); color: var(--text); font-size: 14px; outline: none; box-sizing: border-box; }
 .meta-input:focus { border-color: var(--accent); }
 .import-picks { flex-wrap: wrap; }
-.drawer-panel .group-author { margin-top: 12px; }
+/* 通用的 .wide 带左右 16px 外边距，抽屉里要去掉，不然按钮被推到右边 */
+.drawer-panel .group-author { width: 100%; margin: 12px 0 0; box-sizing: border-box; }
 
-/* 多设备同步、局域网传书 */
-.sync-line { margin: 4px 0 8px; font-size: 13.5px; color: var(--text); }
-.sync-line.bad { color: #e05656; }
+/* 局域网传书 */
 .lan-box { margin: 8px 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
 .lan-box:empty { display: none; }
 .lan-k { font-size: 12px; color: var(--muted); }
 .lan-v { margin: 2px 0 10px; font-size: 20px; font-weight: 650; letter-spacing: .5px; font-variant-numeric: tabular-nums; user-select: all; }
 .lan-v.code { font-size: 28px; letter-spacing: 6px; color: var(--accent); }
+
+/* ---------- 搜索结果：和书架封面墙一样的格子大小 ---------- */
+#search-results.cards { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 16px 10px; }
+#search-results .card { border-radius: 10px; }
+#search-results .card .info { padding: 7px 7px 8px; gap: 4px; }
+#search-results .card .name { font-size: 12px; }
+#search-results .card .author { font-size: 11px; }
+#search-results .card .tags { max-height: 17px; gap: 3px; }   /* 只露一行标签 */
+#search-results .card .tag { padding: 1px 5px; font-size: 10px; line-height: 15px; }
+#search-results .card .upd { font-size: 10.5px; }
+#search-results .card .dlrow { gap: 4px; }
+#search-results .card .dl, #search-results .card .opsbtn { height: 28px; font-size: 12px; border-radius: 7px; }
+#search-results .card .cat { top: 5px; right: 5px; padding: 1px 6px; font-size: 10px; }
+#search-results .card .blkreason { font-size: 10px; }

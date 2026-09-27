@@ -985,7 +985,7 @@ function makeCopyable(el, text, guard) {
 const TIPS = {
   shelf: '长按一本可以多选：批量分组、删除、导出号单。在书架顶部往下拉可以刷新。',
   detail: '点作者名可以复制、搜 TA 的其他作品、收藏或拉黑。',
-  tagblock: '点「拉黑」可以挑这一本、作者、标签一起拉黑；点「收藏」可以收藏喜欢的作者和标签，之后带这些的本子搜索时排在前面。',
+  tagblock: '点「操作」可以把这本的标签设成收藏、反感或拉黑，作者可以收藏或拉黑，这一本也能拉黑。收藏的越多，搜索时排得越前。',
   download: '直接输入 JM 号就能下载，多个号用空格隔开；也可以按标题、作者、标签搜索。',
   'reader-scroll': '双指缩放，双击放大 / 还原，点一下显示或隐藏菜单。右上角可以切换成翻页模式。',
   'reader-ltr': '点屏幕右侧下一页、左侧上一页，中间呼出菜单；也可以左右滑动或按音量键。',
@@ -2757,7 +2757,6 @@ $('#mine-prefs').onclick = openPrefsSheet;
 async function refreshMine() {
   await Promise.all([loadBlacklist(), loadFavorites()]);
   updateNameCounts();
-  if (typeof refreshSync === 'function') refreshSync();
   $('#mine-storage-size').textContent = '计算中…';
   const s = await api.get('/api/storage');
   $('#mine-storage-size').textContent = formatSize(s.books_total + s.cache);
@@ -2847,10 +2846,6 @@ function openShareSheet(book) {
       shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
     });
   }
-  addRow('transfer', '发送到我的其他设备', '经你自己的坚果云中转，对方打开 App 就自动收下', () => {
-    closeSheet();
-    sendToDevice(book);
-  });
   addRow('transfer', '局域网发送', '同一个 Wi-Fi 下直接传，不经过网盘、不限大小', () => {
     closeSheet();
     openLanSendSheet(book);

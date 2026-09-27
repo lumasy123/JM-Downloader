@@ -18,8 +18,7 @@ feed.json
 info_cache.json
 ratings.json
 bookmarks.json
-sync_state.json
-sync_tmp/
+lan_tmp/
 import_tmp/
 
 # Python 缓存、本地工具配置

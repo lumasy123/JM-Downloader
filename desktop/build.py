@@ -63,7 +63,7 @@ def pyinstaller(ico: Path, web: Path) -> None:
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
         "--name", "JMDownloader", "--icon", str(ico),
         "--distpath", str(BUILD / "dist"), "--workpath", str(BUILD / "work"), "--specpath", str(BUILD),
-        "--paths", str(ROOT), "--hidden-import", "server", "--hidden-import", "jmsync",
+        "--paths", str(ROOT), "--hidden-import", "server", "--hidden-import", "jmlan",
         "--collect-submodules", "jmcomic", "--collect-data", "jmcomic",
         "--collect-all", "curl_cffi",
         "--add-data", f"{web}{os.pathsep}web",
