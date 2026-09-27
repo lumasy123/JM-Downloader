@@ -2362,7 +2362,7 @@ function makeCard(item) {
       <div class="tags"></div>
       <div class="dlrow">
         <button class="dl">下载</button>
-        <button class="opsbtn">操作</button>
+        <button class="opsbtn" type="button" aria-label="操作" title="操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
       </div>
     </div>`;
   // 「操作」：标签设成收藏 / 反感 / 拉黑，作者收藏 / 拉黑，这一本拉黑，都在一个弹窗里
@@ -2846,10 +2846,6 @@ function openShareSheet(book) {
       shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
     });
   }
-  addRow('transfer', '局域网发送', '同一个 Wi-Fi 下直接传，不经过网盘、不限大小', () => {
-    closeSheet();
-    openLanSendSheet(book);
-  });
   addRow('book', '导出 PDF', '整本合成一个 PDF，电脑、平板直接能看', deliver('pdf'));
   addRow('box', '打包 ZIP', '每页一张原图，打成一个压缩包', deliver('zip'));
   addRow('grid', '分享封面', '只发封面那一张图', deliver('cover'));

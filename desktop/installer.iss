@@ -1,11 +1,11 @@
 ﻿; JM下载器 桌面端安装包（Inno Setup 6）。由 desktop/build.py 调用，别直接编译：
-;   ISCC /DAppVersion=1.1.0 /DDistDir=<PyInstaller 输出目录> /DOutDir=<安装包输出目录> installer.iss
+;   ISCC /DAppVersion=1.1.1 /DDistDir=<PyInstaller 输出目录> /DOutDir=<安装包输出目录> installer.iss
 ; 装的只有程序本身；书和各种数据在 %APPDATA%\JM下载器（或设置里选的位置），卸载时不会删。
 
 #define AppName "JM下载器"
 #define AppExe "JMDownloader.exe"
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.1"
 #endif
 
 [Setup]

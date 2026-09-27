@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 ROOT = Path(__file__).resolve().parent.parent
 DESKTOP = ROOT / "desktop"
@@ -63,7 +63,7 @@ def pyinstaller(ico: Path, web: Path) -> None:
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
         "--name", "JMDownloader", "--icon", str(ico),
         "--distpath", str(BUILD / "dist"), "--workpath", str(BUILD / "work"), "--specpath", str(BUILD),
-        "--paths", str(ROOT), "--hidden-import", "server", "--hidden-import", "jmlan",
+        "--paths", str(ROOT), "--hidden-import", "server",
         "--collect-submodules", "jmcomic", "--collect-data", "jmcomic",
         "--collect-all", "curl_cffi",
         "--add-data", f"{web}{os.pathsep}web",

@@ -373,8 +373,16 @@
 
   /* ---------------- 点、拖、长按 */
   let pokes = [];
+
+  // 生气那一下要让人看见：摇晃动画播完之前，再戳一概不理。
+  // 不加这个的话下一次 onTap 里的 act('hop') 会把 shake 的 class 摘掉，
+  // 动画当场断掉，等于白生气。
+  const ANGRY_MS = 1000;
+  let angryUntil = 0;
+
   function onTap() {
     if (sticky) return;
+    if (Date.now() < angryUntil) return;   // 正在生气，戳了也不算
     if (active()) {
       speak(pick(L('interrupt')));
       return;
@@ -384,7 +392,8 @@
     pokes.push(now);
     if (pokes.length >= 5) {
       pokes = [];
-      act('shake', 500);
+      angryUntil = now + ANGRY_MS;
+      act('shake', ANGRY_MS);
       speak(pick(L('poke')));
       return;
     }

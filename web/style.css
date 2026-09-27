@@ -1667,7 +1667,7 @@ body.immersive .popmenu { display: none; }
 /* 一次性动作 */
 .pet-move.hop { animation: pet-hop .5s ease-out; }
 .pet-move.happy { animation: pet-hop .5s ease-out 2; }
-.pet-move.shake { animation: pet-shake .45s linear; }
+.pet-move.shake { animation: pet-shake .5s linear 2; }   /* 两遍共 1s，和 pet.js 的 ANGRY_MS 对齐 */
 .pet-move.sad { animation: pet-sad 1.4s ease-in-out; }
 @keyframes pet-hop {
   0% { transform: scale(1.04, .94); }
@@ -1833,19 +1833,24 @@ body.masked .mw-all::after { transform: none; }
 
 /* ---------- 搜索卡片：拉黑 / 收藏 ---------- */
 .card .dlrow { display: flex; gap: 6px; margin-top: auto; }
-.card .dlrow .dl { flex: 7 1 0; min-width: 0; margin-top: 0; }
+.card .dlrow .dl { flex: 1 1 0; min-width: 0; margin-top: 0; }
+/* 图标而不是「操作」两个字：搜索结果的格子只有 104px 宽，按比例分到的宽度
+   放不下两个汉字，会被截成「操…」。固定宽度的方块按钮不受格子宽度影响。 */
 .card .opsbtn {
-  flex: 3 1 0;
-  min-width: 0;
+  flex: 0 0 32px;
+  width: 32px;
   height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: 0;
   border-radius: 9px;
   background: var(--surface-2);
   color: var(--text);
-  font-size: 12.5px;
   cursor: pointer;
 }
+.card .opsbtn svg { width: 18px; height: 18px; fill: currentColor; opacity: .75; }
 .card .opsbtn:active { opacity: .7; }
 .card .acts { display: flex; gap: 6px; }
 .card .acts > button { flex: 1; min-width: 0; margin-top: 6px; }
@@ -2317,13 +2322,6 @@ button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 通用的 .wide 带左右 16px 外边距，抽屉里要去掉，不然按钮被推到右边 */
 .drawer-panel .group-author { width: 100%; margin: 12px 0 0; box-sizing: border-box; }
 
-/* 局域网传书 */
-.lan-box { margin: 8px 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
-.lan-box:empty { display: none; }
-.lan-k { font-size: 12px; color: var(--muted); }
-.lan-v { margin: 2px 0 10px; font-size: 20px; font-weight: 650; letter-spacing: .5px; font-variant-numeric: tabular-nums; user-select: all; }
-.lan-v.code { font-size: 28px; letter-spacing: 6px; color: var(--accent); }
-
 /* ---------- 搜索结果：和书架封面墙一样的格子大小 ---------- */
 #search-results.cards { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 16px 10px; }
 #search-results .card { border-radius: 10px; }
@@ -2334,6 +2332,8 @@ button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #search-results .card .tag { padding: 1px 5px; font-size: 10px; line-height: 15px; }
 #search-results .card .upd { font-size: 10.5px; }
 #search-results .card .dlrow { gap: 4px; }
-#search-results .card .dl, #search-results .card .opsbtn { height: 28px; font-size: 12px; border-radius: 7px; }
+#search-results .card .dl { height: 28px; font-size: 12px; border-radius: 7px; }
+#search-results .card .opsbtn { flex-basis: 28px; width: 28px; height: 28px; border-radius: 7px; }
+#search-results .card .opsbtn svg { width: 16px; height: 16px; }
 #search-results .card .cat { top: 5px; right: 5px; padding: 1px 6px; font-size: 10px; }
 #search-results .card .blkreason { font-size: 10px; }

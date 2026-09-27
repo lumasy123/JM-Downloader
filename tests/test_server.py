@@ -338,35 +338,6 @@ class TestGroupsAndListExtras(Base):
         srv.save_groups({"groups": [], "assign": {}})
 
 
-class TestLan(Base):
-    def test_pack_install_and_lan(self):
-        js = srv.jmlan
-        make_book("100021", pages=2, name="传书测试")
-        z = TMP / "pack.zip"
-        js.pack_book("100021", z)
-        self.assertEqual(js.install_package(z)["skipped"], True)   # JM 书书架上已经有了
-        # 局域网：本机既当接收方又当发送方
-        info = self.post("/api/lan/start", {})
-        self.assertTrue(info["running"])
-        bad = self.post("/api/lan/send", {"id": "100021", "addr": f"127.0.0.1:{info['port']}", "code": "000000"})
-        self.assertIn("error", bad)
-        shutil.rmtree(srv.DOWNLOAD_DIR / "100021")
-        job = self.post("/api/lan/send", {"id": "100022", "addr": f"127.0.0.1:{info['port']}", "code": info["code"]})
-        self.assertIn("error", job)   # 没这本
-        # 把书包装回去（模拟对方收到），再用局域网把它发给「自己」：书架上有了就跳过
-        self.assertEqual(js.install_package(z)["id"], "100021")
-        job = self.post("/api/lan/send", {"id": "100021", "addr": f"127.0.0.1:{info['port']}", "code": info["code"]})
-        for _ in range(50):
-            j = self.get("/api/xfer?id=" + job["id"])
-            if j["state"] != "running":
-                break
-            time.sleep(0.1)
-        self.assertEqual(j["state"], "done", j)
-        self.assertEqual(self.get("/api/lan/status")["received"][0]["skipped"], True)
-        self.post("/api/lan/stop", {})
-        shutil.rmtree(srv.DOWNLOAD_DIR / "100021", ignore_errors=True)
-
-
 class TestFeedAndBackup(Base):
     def test_dismiss_and_seen(self):
         self.post("/api/feed/dismiss", {"id": "555"})

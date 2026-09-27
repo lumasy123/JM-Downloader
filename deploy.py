@@ -59,8 +59,8 @@ def sync() -> str:
     py_dir = APP_MAIN / "python"
     py_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "server.py", py_dir / "server.py")
-    shutil.copy2(ROOT / "jmlan.py", py_dir / "jmlan.py")
     (py_dir / "jmsync.py").unlink(missing_ok=True)   # 旧版的同步模块
+    (py_dir / "jmlan.py").unlink(missing_ok=True)    # 旧版的局域网传书
 
     web_src = ROOT / "web"
     web_dst = APP_MAIN / "assets" / "web"

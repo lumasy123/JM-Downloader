@@ -13,7 +13,7 @@ android {
         minSdk 24
         targetSdk 34
         versionCode 2
-        versionName "1.1.0"
+        versionName "1.1.1"
 
         // arm 两个给真机，x86_64 给电脑模拟器（MuMu/雷电/夜神都是 x86_64，
         // 少了它会因为加载不了 libpython 而一开就闪退）
