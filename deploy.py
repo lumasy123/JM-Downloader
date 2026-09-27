@@ -59,6 +59,7 @@ def sync() -> str:
     py_dir = APP_MAIN / "python"
     py_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "server.py", py_dir / "server.py")
+    shutil.copy2(ROOT / "jmsync.py", py_dir / "jmsync.py")
 
     web_src = ROOT / "web"
     web_dst = APP_MAIN / "assets" / "web"

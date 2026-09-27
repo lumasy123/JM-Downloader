@@ -2757,6 +2757,7 @@ $('#mine-prefs').onclick = openPrefsSheet;
 async function refreshMine() {
   await Promise.all([loadBlacklist(), loadFavorites()]);
   updateNameCounts();
+  if (typeof refreshSync === 'function') refreshSync();
   $('#mine-storage-size').textContent = '计算中…';
   const s = await api.get('/api/storage');
   $('#mine-storage-size').textContent = formatSize(s.books_total + s.cache);
@@ -2846,6 +2847,14 @@ function openShareSheet(book) {
       shareText(`JM${book.id}${book.name ? ' ' + book.name : ''}${book.author ? '（' + book.author + '）' : ''}`);
     });
   }
+  addRow('transfer', '发送到我的其他设备', '经你自己的坚果云中转，对方打开 App 就自动收下', () => {
+    closeSheet();
+    sendToDevice(book);
+  });
+  addRow('transfer', '局域网发送', '同一个 Wi-Fi 下直接传，不经过网盘、不限大小', () => {
+    closeSheet();
+    openLanSendSheet(book);
+  });
   addRow('book', '导出 PDF', '整本合成一个 PDF，电脑、平板直接能看', deliver('pdf'));
   addRow('box', '打包 ZIP', '每页一张原图，打成一个压缩包', deliver('zip'));
   addRow('grid', '分享封面', '只发封面那一张图', deliver('cover'));

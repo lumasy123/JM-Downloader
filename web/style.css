@@ -2315,3 +2315,12 @@ button.fit1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta-input:focus { border-color: var(--accent); }
 .import-picks { flex-wrap: wrap; }
 .drawer-panel .group-author { margin-top: 12px; }
+
+/* 多设备同步、局域网传书 */
+.sync-line { margin: 4px 0 8px; font-size: 13.5px; color: var(--text); }
+.sync-line.bad { color: #e05656; }
+.lan-box { margin: 8px 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
+.lan-box:empty { display: none; }
+.lan-k { font-size: 12px; color: var(--muted); }
+.lan-v { margin: 2px 0 10px; font-size: 20px; font-weight: 650; letter-spacing: .5px; font-variant-numeric: tabular-nums; user-select: all; }
+.lan-v.code { font-size: 28px; letter-spacing: 6px; color: var(--accent); }

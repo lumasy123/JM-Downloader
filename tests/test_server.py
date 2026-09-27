@@ -17,7 +17,7 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -336,6 +336,157 @@ class TestGroupsAndListExtras(Base):
             self.post("/api/note", {"id": i, "text": ""})
             shutil.rmtree(srv.DOWNLOAD_DIR / i, ignore_errors=True)
         srv.save_groups({"groups": [], "assign": {}})
+
+
+class FakeDav(BaseHTTPRequestHandler):
+    """内存里的迷你 WebDAV（GET / PUT / DELETE / MKCOL），当坚果云用。"""
+    files: dict = {}
+
+    def log_message(self, *a):
+        pass
+
+    def _ok(self, code=200, body=b""):
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        body = self.files.get(self.path)
+        self._ok(404) if body is None else self._ok(200, body)
+
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.files[self.path] = self.rfile.read(n)
+        self._ok(201)
+
+    def do_DELETE(self):
+        self.files.pop(self.path, None)
+        self._ok(204)
+
+    def do_MKCOL(self):
+        self._ok(201)
+
+
+class TestSync(Base):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.dav = ThreadingHTTPServer(("127.0.0.1", 0), FakeDav)
+        threading.Thread(target=cls.dav.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.dav.server_address[1]}/dav/"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dav.shutdown()
+        super().tearDownClass()
+
+    def setUp(self):
+        FakeDav.files.clear()
+        srv.jmsync._SALT = srv.jmsync._SALT
+        srv.jmsync._outbox.clear()
+        srv.jmsync._snapshot_path().unlink(missing_ok=True)
+        srv.CONFIG.pop("sync", None)
+
+    def remote(self):
+        blob = [v for k, v in FakeDav.files.items() if k.endswith("state.bin")][0]
+        return json.loads(srv.jmsync.decrypt_bytes(blob, "secret123"))["items"]
+
+    def put_remote(self, items):
+        path = [k for k in FakeDav.files if k.endswith("state.bin")][0]
+        FakeDav.files[path] = srv.jmsync.encrypt_bytes(json.dumps({"v": 1, "items": items}).encode(), "secret123")
+
+    def test_two_way_merge(self):
+        js = srv.jmsync
+        self.post("/api/names", {"list": "fav", "kind": "tags", "add": ["眼镜"]})
+        res = self.post("/api/sync/config", {"user": "u", "password": "p", "passphrase": "secret123", "url": self.url,
+                                             "device_name": "电脑"})
+        self.assertTrue(res.get("ok"), res)
+        items = self.remote()
+        self.assertEqual(items["fav-tags|眼镜"]["v"], "眼镜")
+        # 云端的明文里看不到内容
+        self.assertNotIn("眼镜".encode(), [v for k, v in FakeDav.files.items() if k.endswith("state.bin")][0])
+
+        # 另一台设备（时钟比这边快 5 秒）：加了拉黑标签「眼镜」、加了分组
+        later = time.time() + 5
+        items["black-tags|眼镜"] = {"v": "眼镜", "t": later, "d": "zzz"}
+        items["groups|追更"] = {"v": 1, "t": later, "d": "zzz"}
+        items["device|zzz"] = {"v": {"name": "手机", "seen": later}, "t": later, "d": "zzz"}
+        self.put_remote(items)
+        self.assertTrue(js.sync_once().get("ok"))
+        self.assertEqual(srv.load_blacklist()["tags"], ["眼镜"])
+        self.assertEqual(srv.load_favorites()["tags"], [])      # 同一标签只留最后改的那边
+        self.assertIn("追更", srv.load_groups()["groups"])
+        st = self.get("/api/sync/status")
+        self.assertEqual({d["name"] for d in st["devices"]}, {"电脑", "手机"})
+
+        # 本机删掉拉黑 → 云端记成删除（别的设备同步后也会删）；对方时钟快也不会被盖回去
+        self.post("/api/names", {"list": "black", "kind": "tags", "remove": ["眼镜"]})
+        self.assertTrue(js.local_changed())
+        js.sync_once()
+        self.assertIsNone(self.remote()["black-tags|眼镜"]["v"])
+
+        # 同步密码不对
+        srv.CONFIG["sync"]["passphrase"] = "wrong-pass"
+        self.assertIn("同步密码", js.sync_once()["error"])
+        srv.CONFIG["sync"]["passphrase"] = "secret123"
+        srv.save_groups({"groups": [], "assign": {}})
+        js.disable()
+
+    def test_cloud_transfer(self):
+        js = srv.jmsync
+        self.post("/api/sync/config", {"user": "u", "password": "p", "passphrase": "secret123", "url": self.url})
+        album = make_book("9000000050", pages=2, name="本地的书")
+        meta = json.loads((album / "meta.json").read_text("utf-8"))
+        meta["local"] = True
+        (album / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), "utf-8")
+        me = self.get("/api/sync/status")["device_id"]
+        job = self.post("/api/sync/send", {"id": "9000000050", "to": me})
+        for _ in range(100):
+            j = self.get("/api/xfer?id=" + job["id"])
+            if j["state"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(j["state"], "done", j)
+        # 发给自己：同步后自动收下，成了一本新的本地书；云端的书包删掉了
+        for _ in range(100):
+            got = [b for b in self.get("/api/shelf")["items"] if b["name"] == "本地的书" and b["id"] != "9000000050"]
+            if got and not [k for k in FakeDav.files if "/books/" in k]:
+                break
+            time.sleep(0.1)
+        self.assertTrue(got)
+        self.assertFalse([k for k in FakeDav.files if "/books/" in k])
+        for b in got:
+            shutil.rmtree(srv.DOWNLOAD_DIR / b["id"], ignore_errors=True)
+        shutil.rmtree(album, ignore_errors=True)
+        js.disable()
+
+    def test_pack_install_and_lan(self):
+        js = srv.jmsync
+        make_book("100021", pages=2, name="传书测试")
+        z = TMP / "pack.zip"
+        js.pack_book("100021", z)
+        self.assertEqual(js.install_package(z)["skipped"], True)   # JM 书书架上已经有了
+        # 局域网：本机既当接收方又当发送方
+        info = self.post("/api/lan/start", {})
+        self.assertTrue(info["running"])
+        bad = self.post("/api/lan/send", {"id": "100021", "addr": f"127.0.0.1:{info['port']}", "code": "000000"})
+        self.assertIn("error", bad)
+        shutil.rmtree(srv.DOWNLOAD_DIR / "100021")
+        job = self.post("/api/lan/send", {"id": "100022", "addr": f"127.0.0.1:{info['port']}", "code": info["code"]})
+        self.assertIn("error", job)   # 没这本
+        # 把书包装回去（模拟对方收到），再用局域网把它发给「自己」：书架上有了就跳过
+        self.assertEqual(js.install_package(z)["id"], "100021")
+        job = self.post("/api/lan/send", {"id": "100021", "addr": f"127.0.0.1:{info['port']}", "code": info["code"]})
+        for _ in range(50):
+            j = self.get("/api/xfer?id=" + job["id"])
+            if j["state"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(j["state"], "done", j)
+        self.assertEqual(self.get("/api/lan/status")["received"][0]["skipped"], True)
+        self.post("/api/lan/stop", {})
+        shutil.rmtree(srv.DOWNLOAD_DIR / "100021", ignore_errors=True)
 
 
 class TestFeedAndBackup(Base):

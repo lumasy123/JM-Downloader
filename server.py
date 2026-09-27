@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -2227,6 +2228,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 路由 ----
     def do_GET(self):
         self._raw_body = None   # 同一个连接会处理好几个请求，上一个的请求体不能串过来
+        _p = urllib.parse.urlparse(self.path).path
+        if _p.startswith(("/api/sync/", "/api/lan/", "/api/xfer")) and jmsync and jmsync.route(self, "GET", _p):
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -2392,6 +2396,9 @@ class Handler(BaseHTTPRequestHandler):
         self._raw_body = None
         if path != "/api/import/file":
             self.body_json()
+        # 多设备同步、局域网传书在 jmsync.py 里
+        if path.startswith(("/api/sync/", "/api/lan/", "/api/xfer")) and jmsync and jmsync.route(self, "POST", path):
+            return
         if path == "/api/download":
             album_id = re.sub(r"\D", "", str(self.body_json().get("id", "")))
             if not album_id:
@@ -2852,6 +2859,15 @@ def main() -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止")
+
+
+# 多设备同步 / 局域网传书：放在单独的文件里，缺了也不影响主程序
+try:
+    import jmsync
+    jmsync.init(sys.modules[__name__])
+except Exception as _e:   # pragma: no cover
+    jmsync = None
+    print("同步模块没加载：", _e)
 
 
 if __name__ == "__main__":
